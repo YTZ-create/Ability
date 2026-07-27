@@ -13,6 +13,34 @@ interface CellInfo {
   ref: string // 如 "A1", "B2"
   value: string
   type: 's' | 'str' | 'n' | 'b' | 'inlineStr' // shared string, string, number, boolean, inline string
+  formula?: string // 公式内容（如果有）
+  style?: string // 样式索引
+}
+
+/**
+ * 合并单元格信息
+ */
+interface MergedCellInfo {
+  ref: string // 合并区域引用，如 "A1:C3"
+  startRow: number
+  startCol: number
+  endRow: number
+  endCol: number
+}
+
+/**
+ * 数据验证信息
+ */
+interface DataValidationInfo {
+  ref: string // 应用的单元格区域
+  type: string // 验证类型：list, whole, decimal, date, textLength 等
+  formula1?: string // 验证公式1
+  formula2?: string // 验证公式2
+  allowBlank?: boolean
+  showDropDown?: boolean
+  showErrorMessage?: boolean
+  errorTitle?: string
+  error?: string
 }
 
 /**
@@ -20,22 +48,131 @@ interface CellInfo {
  */
 function extractCellsFromSheet(sheetXml: string): CellInfo[] {
   const cells: CellInfo[] = []
-  const cellRegex = /<c\s+r="([^"]+)"([^>]*)>(?:<v>([^<]*)<\/v>)?/g
+  // 增强：同时提取公式和样式信息
+  const cellRegex = /<c\s+r="([^"]+)"([^>]*)>(?:<f>([^<]*)<\/f>)?(?:<v>([^<]*)<\/v>)?/g
   let match
 
   while ((match = cellRegex.exec(sheetXml)) !== null) {
     const ref = match[1]
     const attrs = match[2]
-    const value = match[3] || ''
+    const formula = match[3] || ''
+    const value = match[4] || ''
 
     // 提取类型属性
     const typeMatch = attrs.match(/t="([^"]+)"/)
     const type = typeMatch ? typeMatch[1] as CellInfo['type'] : 'n'
 
-    cells.push({ ref, value, type })
+    // 提取样式索引
+    const styleMatch = attrs.match(/s="([^"]+)"/)
+    const style = styleMatch ? styleMatch[1] : undefined
+
+    cells.push({ ref, value, type, formula: formula || undefined, style })
   }
 
   return cells
+}
+
+/**
+ * 从工作表 XML 中提取合并单元格信息
+ */
+function extractMergedCells(sheetXml: string): MergedCellInfo[] {
+  const mergedCells: MergedCellInfo[] = []
+  const mergeCellRegex = /<mergeCell\s+ref="([^"]+)"[^>]*\/>/g
+  let match
+
+  while ((match = mergeCellRegex.exec(sheetXml)) !== null) {
+    const ref = match[1]
+    // 解析合并区域，如 "A1:C3"
+    const rangeMatch = ref.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
+    if (rangeMatch) {
+      const startCol = columnLetterToNumber(rangeMatch[1])
+      const startRow = parseInt(rangeMatch[2], 10)
+      const endCol = columnLetterToNumber(rangeMatch[3])
+      const endRow = parseInt(rangeMatch[4], 10)
+
+      mergedCells.push({ ref, startRow, startCol, endRow, endCol })
+    }
+  }
+
+  console.log(`[xlsxHandler] Found ${mergedCells.length} merged cell(s)`)
+  return mergedCells
+}
+
+/**
+ * 从工作表 XML 中提取数据验证信息
+ */
+function extractDataValidations(sheetXml: string): DataValidationInfo[] {
+  const validations: DataValidationInfo[] = []
+  const dataValidationRegex = /<dataValidation\s+([^>]*)>(?:<formula1>([^<]*)<\/formula1>)?(?:<formula2>([^<]*)<\/formula2>)?<\/dataValidation>/g
+  let match
+
+  while ((match = dataValidationRegex.exec(sheetXml)) !== null) {
+    const attrs = match[1]
+    const formula1 = match[2] || ''
+    const formula2 = match[3] || ''
+
+    // 提取属性
+    const typeMatch = attrs.match(/type="([^"]+)"/)
+    const refMatch = attrs.match(/sqref="([^"]+)"/)
+    const allowBlankMatch = attrs.match(/allowBlank="([^"]+)"/)
+    const showDropDownMatch = attrs.match(/showDropDown="([^"]+)"/)
+    const showErrorMessageMatch = attrs.match(/showErrorMessage="([^"]+)"/)
+    const errorTitleMatch = attrs.match(/errorTitle="([^"]+)"/)
+    const errorMatch = attrs.match(/error="([^"]+)"/)
+
+    if (refMatch) {
+      validations.push({
+        ref: refMatch[1],
+        type: typeMatch ? typeMatch[1] : 'none',
+        formula1: formula1 || undefined,
+        formula2: formula2 || undefined,
+        allowBlank: allowBlankMatch ? allowBlankMatch[1] === '1' : undefined,
+        showDropDown: showDropDownMatch ? showDropDownMatch[1] === '1' : undefined,
+        showErrorMessage: showErrorMessageMatch ? showErrorMessageMatch[1] === '1' : undefined,
+        errorTitle: errorTitleMatch ? errorTitleMatch[1] : undefined,
+        error: errorMatch ? errorMatch[1] : undefined,
+      })
+    }
+  }
+
+  console.log(`[xlsxHandler] Found ${validations.length} data validation(s)`)
+  return validations
+}
+
+/**
+ * 检查单元格是否在合并区域内（但不是首格）
+ */
+function isNonFirstMergedCell(ref: string, mergedCells: MergedCellInfo[]): boolean {
+  try {
+    const { col, row } = parseCellRef(ref)
+    for (const merged of mergedCells) {
+      // 检查是否在合并区域内
+      if (row >= merged.startRow && row <= merged.endRow &&
+          col >= merged.startCol && col <= merged.endCol) {
+        // 检查是否不是首格（首格是合并区域的左上角）
+        if (row !== merged.startRow || col !== merged.startCol) {
+          return true
+        }
+      }
+    }
+  } catch (e) {
+    // 解析失败，保守处理
+  }
+  return false
+}
+
+/**
+ * 检查单元格是否有数据验证（下拉列表等）
+ */
+function getCellDataValidation(ref: string, validations: DataValidationInfo[]): DataValidationInfo | null {
+  for (const validation of validations) {
+    // 简单检查：如果验证区域的引用包含此单元格
+    // 更精确的检查需要解析区域引用（如 "A1:A10"）
+    if (validation.ref === ref || validation.ref.includes(ref)) {
+      return validation
+    }
+  }
+  return null
 }
 
 /**
@@ -163,8 +300,12 @@ export async function fillXlsxWithXml(
   for (const sheetFile of sheetFiles) {
     let sheetXml = sheetFile.asText()
     const cells = extractCellsFromSheet(sheetXml)
+    
+    // 提取合并单元格和数据验证信息
+    const mergedCells = extractMergedCells(sheetXml)
+    const dataValidations = extractDataValidations(sheetXml)
 
-    console.log(`[xlsxHandler][XML] Processing sheet: ${sheetFile.name}, found ${cells.length} cells`)
+    console.log(`[xlsxHandler][XML] Processing sheet: ${sheetFile.name}, found ${cells.length} cells, ${mergedCells.length} merged, ${dataValidations.length} validations`)
 
     // 查找标签单元格并填写值
     for (const cell of cells) {
@@ -202,20 +343,54 @@ export async function fillXlsxWithXml(
           continue
         }
 
-        // 添加新字符串到 sharedStrings
-        const newIdx = sharedStrings.length
-        sharedStrings.push(value)
+        // 检查目标单元格是否是合并区域的非首格（不能写入）
+        if (isNonFirstMergedCell(targetRef, mergedCells)) {
+          console.warn(`[xlsxHandler][XML] Target ${targetRef} is non-first merged cell, skipping`)
+          continue
+        }
 
-        // 修改工作表 XML，在目标单元格写入值
-        const targetCellRegex = new RegExp(`<c\\s+r="${targetRef}"[^>]*>.*?<\\/c>`, 's')
-        if (targetCellRegex.test(sheetXml)) {
-          // 单元格已存在，更新它
-          sheetXml = sheetXml.replace(
-            targetCellRegex,
-            `<c r="${targetRef}" t="s"><v>${newIdx}</v></c>`
-          )
+        // 检查目标单元格是否有数据验证（下拉列表等）
+        const validation = getCellDataValidation(targetRef, dataValidations)
+        if (validation && validation.type === 'list') {
+          // 验证值是否在可选项中
+          const listFormula = validation.formula1 || ''
+          console.log(`[xlsxHandler][XML] Target ${targetRef} has list validation: ${listFormula}`)
+          // 注意：这里只是记录日志，实际填写仍然进行，但会提示用户
+        }
+
+        // 检查目标单元格是否是公式单元格（保留公式，只更新引用数据）
+        const targetCellRegex = new RegExp(`<c\\s+r="${targetRef}"([^>]*)>(?:<f>([^<]*)<\\/f>)?(?:<v>([^<]*)<\\/v>)?<\\/c>`, 's')
+        const targetMatch = sheetXml.match(targetCellRegex)
+        
+        if (targetMatch) {
+          const existingFormula = targetMatch[2] || ''
+          const existingStyle = targetMatch[1]?.match(/s="([^"]+)"/)?.[1] || ''
+          
+          if (existingFormula) {
+            // 目标单元格有公式，保留公式但更新计算值
+            console.log(`[xlsxHandler][XML] Target ${targetRef} has formula "${existingFormula}", preserving formula and updating value`)
+            const styleAttr = existingStyle ? ` s="${existingStyle}"` : ''
+            sheetXml = sheetXml.replace(
+              targetCellRegex,
+              `<c r="${targetRef}"${styleAttr}><f>${existingFormula}</f><v>${escapeXml(value)}</v></c>`
+            )
+          } else {
+            // 目标单元格没有公式，直接更新值
+            // 添加新字符串到 sharedStrings
+            const newIdx = sharedStrings.length
+            sharedStrings.push(value)
+            
+            const styleAttr = existingStyle ? ` s="${existingStyle}"` : ''
+            sheetXml = sheetXml.replace(
+              targetCellRegex,
+              `<c r="${targetRef}"${styleAttr} t="s"><v>${newIdx}</v></c>`
+            )
+          }
         } else {
           // 单元格不存在，在合适位置插入
+          const newIdx = sharedStrings.length
+          sharedStrings.push(value)
+          
           // 简单策略：在 </sheetData> 前插入
           sheetXml = sheetXml.replace(
             '</sheetData>',

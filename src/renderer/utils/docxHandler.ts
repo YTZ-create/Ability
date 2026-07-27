@@ -7,6 +7,15 @@ import type { FormField } from '../agents/formFiller'
 export type FillMethod = 'word-com' | 'dom-parser' | 'regex'
 
 /**
+ * 文档结构信息（用于填写前后的结构校验）
+ */
+export interface DocxStructureInfo {
+  paragraphCount: number
+  tableCount: number
+  cellCount: number
+}
+
+/**
  * 从 XML 中提取所有 <w:t> 文本节点的内容和位置信息
  */
 interface TextNodeInfo {
@@ -349,6 +358,9 @@ export async function fillDocxFile(
   let filledXml = docXml
   let filledCount = 0
 
+  // 提取填写前的文档结构信息（用于防错位校验）
+  const structureBefore = extractDocxStructureInfo(filledXml)
+
   for (const field of fields) {
     if (!field.value) continue
 
@@ -362,6 +374,200 @@ export async function fillDocxFile(
     const textNodes = extractTextNodes(filledXml)
 
     let filled = false
+
+    // ============================================================
+    // 新策略：段落级 Run 合并替换（解决 Run 碎片化导致的下划线错位）
+    // 优先级最高，因为它能处理占位符被拆分到多个 Run 的情况
+    // ============================================================
+    if (!filled) {
+      const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
+      let paraMatch
+      while ((paraMatch = paraRegex.exec(filledXml)) !== null) {
+        const paraXml = paraMatch[0]
+        // 构建段落完整文本
+        const textMatches = paraXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+        let paraText = ''
+        for (const tm of textMatches) {
+          const m = tm.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
+          if (m) paraText += m[1]
+        }
+
+        // 情况1：标签和占位符在同一段落（如 "姓名：________"）
+        if (paraText.includes(label)) {
+          const afterLabel = paraText.substring(paraText.indexOf(label) + label.length)
+          const placeholderMatch = afterLabel.match(/^[：:\s]*([＿_]{2,}|[（(][\s]*[)）])/)
+
+          if (placeholderMatch) {
+            const fullPlaceholder = placeholderMatch[0]
+            const result = replacePlaceholderInParagraph(
+              paraXml,
+              fullPlaceholder,
+              escapedValue
+            )
+            if (result.success) {
+              filledXml = filledXml.substring(0, paraMatch.index) + result.newParagraphXml + filledXml.substring(paraMatch.index + paraMatch[0].length)
+              filled = true
+              filledCount++
+              console.log(`[docxHandler][Smart] ✓ Strategy -1: Paragraph-level Run merge replacement (same paragraph)`)
+              break
+            }
+          }
+
+          // 情况1b：标签后直接跟内容（无占位符，如 "姓名：张三"）
+          if (!filled) {
+            const colonMatch = afterLabel.match(/^[：:\s]+/)
+            if (colonMatch) {
+              const result = replacePlaceholderInParagraph(
+                paraXml,
+                colonMatch[0],
+                colonMatch[0] + escapedValue
+              )
+              if (result.success) {
+                filledXml = filledXml.substring(0, paraMatch.index) + result.newParagraphXml + filledXml.substring(paraMatch.index + paraMatch[0].length)
+                filled = true
+                filledCount++
+                console.log(`[docxHandler][Smart] ✓ Strategy -1b: Paragraph-level insertion after colon`)
+                break
+              }
+            }
+          }
+        }
+
+        // 情况2：表格场景 - 标签在一个单元格，占位符在相邻单元格
+        // 检查段落是否在包含 anchorText 的单元格中
+        if (!filled && field.anchorText && paraText.includes(field.anchorText)) {
+          // 尝试在当前段落中查找占位符
+          const placeholderMatch = paraText.match(/([＿_]{2,}|[（(][\s]*[)）])/)
+          if (placeholderMatch) {
+            const result = replacePlaceholderInParagraph(
+              paraXml,
+              placeholderMatch[0],
+              escapedValue
+            )
+            if (result.success) {
+              filledXml = filledXml.substring(0, paraMatch.index) + result.newParagraphXml + filledXml.substring(paraMatch.index + paraMatch[0].length)
+              filled = true
+              filledCount++
+              console.log(`[docxHandler][Smart] ✓ Strategy -1c: Paragraph-level replacement with anchorText`)
+              break
+            }
+          }
+        }
+      }
+    }
+
+    // ============================================================
+    // 新策略：表格关键词锚定 + 合并单元格兼容 + 增量写入
+    // 通过关键词定位单元格，免疫合并单元格导致的索引错位
+    // ============================================================
+    if (!filled && field.anchorText && hasTable) {
+      // 查找包含 anchorText 的单元格
+      const labelCell = findCellByKeyword(filledXml, field.anchorText)
+
+      if (labelCell) {
+        console.log(`[docxHandler][Smart] Strategy -2: Found label cell by keyword "${field.anchorText.substring(0, 30)}..."`)
+
+        // 检查是否为合并单元格
+        if (isMergedCell(labelCell.cellXml)) {
+          console.log(`[docxHandler][Smart] ⚠ Label cell is merged, looking for next non-merged cell`)
+        }
+
+        // 查找右侧相邻单元格
+        const afterLabelCell = filledXml.substring(labelCell.cellEnd)
+        const nextCellMatch = afterLabelCell.match(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/)
+
+        if (nextCellMatch) {
+          const nextCellXml = nextCellMatch[0]
+          const nextCellStart = labelCell.cellEnd + nextCellMatch.index
+          const nextCellEnd = nextCellStart + nextCellXml.length
+
+          // 检查相邻单元格是否为合并单元格（非首格）
+          const isNextMerged = isMergedCell(nextCellXml)
+          if (isNextMerged) {
+            console.log(`[docxHandler][Smart] ⚠ Adjacent cell is merged, skipping to avoid invisible content`)
+          } else {
+            // 在相邻单元格中查找占位符
+            const cellTextMatches = nextCellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+            let cellText = ''
+            for (const tm of cellTextMatches) {
+              const m = tm.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
+              if (m) cellText += m[1]
+            }
+
+            // 尝试替换占位符
+            const placeholderMatch = cellText.match(/([＿_]{2,}|[（(][\s]*[)）])/)
+            if (placeholderMatch) {
+              const result = replaceInCell(nextCellXml, placeholderMatch[0], escapedValue)
+              if (result.success) {
+                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                filled = true
+                filledCount++
+                console.log(`[docxHandler][Smart] ✓ Strategy -2: Table keyword anchor + cell replacement (placeholder)`)
+              }
+            }
+
+            // 如果单元格为空或仅含空白，直接填入
+            if (!filled && (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim()))) {
+              const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
+              if (result.success) {
+                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                filled = true
+                filledCount++
+                console.log(`[docxHandler][Smart] ✓ Strategy -2b: Table keyword anchor + cell replacement (empty cell)`)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ============================================================
+    // 新策略：表格关键词锚定 - 直接用 label 定位（无 anchorText 时）
+    // ============================================================
+    if (!filled && hasTable) {
+      const labelCell = findCellByKeyword(filledXml, label)
+      if (labelCell) {
+        // 查找右侧相邻单元格
+        const afterLabelCell = filledXml.substring(labelCell.cellEnd)
+        const nextCellMatch = afterLabelCell.match(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/)
+
+        if (nextCellMatch) {
+          const nextCellXml = nextCellMatch[0]
+          const nextCellStart = labelCell.cellEnd + nextCellMatch.index
+          const nextCellEnd = nextCellStart + nextCellXml.length
+
+          // 检查是否为合并单元格
+          if (!isMergedCell(nextCellXml)) {
+            const cellTextMatches = nextCellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+            let cellText = ''
+            for (const tm of cellTextMatches) {
+              const m = tm.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
+              if (m) cellText += m[1]
+            }
+
+            // 替换占位符或填入空单元格
+            const placeholderMatch = cellText.match(/([＿_]{2,}|[（(][\s]*[)）])/)
+            if (placeholderMatch) {
+              const result = replaceInCell(nextCellXml, placeholderMatch[0], escapedValue)
+              if (result.success) {
+                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                filled = true
+                filledCount++
+                console.log(`[docxHandler][Smart] ✓ Strategy -2c: Table label keyword anchor + cell replacement`)
+              }
+            } else if (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim())) {
+              const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
+              if (result.success) {
+                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                filled = true
+                filledCount++
+                console.log(`[docxHandler][Smart] ✓ Strategy -2d: Table label keyword anchor + empty cell fill`)
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Step 1: 查找填写目标位置
     // 如果有 anchorText 且文档包含表格（表格场景：标签和填写位置在不同单元格），优先用 anchorText 定位
@@ -771,6 +977,20 @@ export async function fillDocxFile(
   console.log(`\n[docxHandler][Smart] === Summary ===`)
   console.log(`[docxHandler][Smart] Filled ${filledCount} / ${fieldsWithValue.length} fields`)
 
+  // ============================================================
+  // 防错位校验：填写后对比文档结构
+  // ============================================================
+  const structureAfter = extractDocxStructureInfo(filledXml)
+  const structureComparison = compareDocxStructure(structureBefore, structureAfter)
+  if (!structureComparison.consistent) {
+    console.warn(`[docxHandler][Smart] ⚠ Structure changes detected after filling:`)
+    for (const warning of structureComparison.warnings) {
+      console.warn(`[docxHandler][Smart]   - ${warning}`)
+    }
+  } else {
+    console.log(`[docxHandler][Smart] ✓ Structure preserved: ${structureBefore.paragraphCount} paragraphs, ${structureBefore.tableCount} tables, ${structureBefore.cellCount} cells`)
+  }
+
   // 创建全新的 zip 实例，逐个复制文件（避免直接修改原实例导致文件损坏）
   const newZip = new PizZip()
   // 遍历原 zip 中的所有文件
@@ -950,6 +1170,286 @@ function addUnderlineToRunAt(xml: string, textNodePos: number): string {
 }
 
 // ============================================================
+// 防错位机制：段落 Run 合并替换法
+// ============================================================
+
+/**
+ * 段落 Run 信息
+ */
+interface ParagraphRunInfo {
+  runXml: string
+  textContent: string
+  startOffset: number
+  endOffset: number
+}
+
+/**
+ * 段落 Run 合并替换法（解决下划线占位符错位）
+ * 核心逻辑：
+ * 1. 遍历段落所有 run 拼接完整文本
+ * 2. 定位占位符的起止偏移
+ * 3. 映射回对应的 run 范围
+ * 4. 合并目标 run 的文本并替换
+ * 5. 写回第一个 run 并清空其余 run
+ * 6. 全程继承原有格式
+ */
+function replacePlaceholderInParagraph(
+  paragraphXml: string,
+  placeholder: string,
+  replaceText: string
+): { success: boolean; newParagraphXml: string } {
+  // 提取段落中的所有 run
+  const runs: ParagraphRunInfo[] = []
+  const runRegex = /<w:r\b[^>]*>[\s\S]*?<\/w:r>/g
+  let match
+  let offset = 0
+
+  while ((match = runRegex.exec(paragraphXml)) !== null) {
+    const runXml = match[0]
+    // 提取 run 内的所有文本
+    const textMatches = runXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+    let textContent = ''
+    for (const textMatch of textMatches) {
+      const text = textMatch.replace(/<w:t[^>]*>([^<]*)<\/w:t>/, '$1')
+      textContent += text
+    }
+
+    runs.push({
+      runXml,
+      textContent,
+      startOffset: offset,
+      endOffset: offset + textContent.length,
+    })
+
+    offset += textContent.length
+  }
+
+  if (runs.length === 0) {
+    return { success: false, newParagraphXml: paragraphXml }
+  }
+
+  // 拼接完整段落文本
+  const fullText = runs.map(r => r.textContent).join('')
+
+  // 查找占位符
+  const placeholderIdx = fullText.indexOf(placeholder)
+  if (placeholderIdx === -1) {
+    return { success: false, newParagraphXml: paragraphXml }
+  }
+
+  const placeholderEnd = placeholderIdx + placeholder.length
+
+  // 找到覆盖占位符的所有 run
+  const targetRuns: ParagraphRunInfo[] = []
+  for (const run of runs) {
+    if (run.endOffset > placeholderIdx && run.startOffset < placeholderEnd) {
+      targetRuns.push(run)
+    }
+  }
+
+  if (targetRuns.length === 0) {
+    return { success: false, newParagraphXml: paragraphXml }
+  }
+
+  // 构建新的第一个 run 内容
+  const firstRun = targetRuns[0]
+  const beforePlaceholder = fullText.substring(firstRun.startOffset, placeholderIdx)
+  const afterPlaceholder = fullText.substring(placeholderEnd, targetRuns[targetRuns.length - 1].endOffset)
+
+  // 替换第一个 run 的文本内容
+  let newFirstRunXml = firstRun.runXml
+  const textRegex = /<w:t([^>]*)>([^<]*)<\/w:t>/g
+  let newTextContent = beforePlaceholder + replaceText + afterPlaceholder
+  let firstTextMatch = true
+
+  newFirstRunXml = newFirstRunXml.replace(textRegex, (match, attrs, text) => {
+    if (firstTextMatch) {
+      firstTextMatch = false
+      return `<w:t${attrs}>${escapeXml(newTextContent)}</w:t>`
+    }
+    return match
+  })
+
+  // 清空其他目标 run 的文本
+  let newParagraphXml = paragraphXml.replace(firstRun.runXml, newFirstRunXml)
+  for (let i = 1; i < targetRuns.length; i++) {
+    const run = targetRuns[i]
+    const emptyRunXml = run.runXml.replace(/<w:t([^>]*)>[^<]*<\/w:t>/g, '<w:t$1></w:t>')
+    newParagraphXml = newParagraphXml.replace(run.runXml, emptyRunXml)
+  }
+
+  console.log(`[docxHandler][RunMerge] ✓ Replaced placeholder "${placeholder}" across ${targetRuns.length} run(s)`)
+  return { success: true, newParagraphXml }
+}
+
+/**
+ * 提取文档结构信息（用于填写前后的结构校验）
+ */
+export function extractDocxStructureInfo(docXml: string): DocxStructureInfo {
+  const paragraphCount = (docXml.match(/<w:p\b/g) || []).length
+  const tableCount = (docXml.match(/<w:tbl\b/g) || []).length
+  const cellCount = (docXml.match(/<w:tc\b/g) || []).length
+
+  return { paragraphCount, tableCount, cellCount }
+}
+
+/**
+ * 对比填写前后的文档结构
+ */
+export function compareDocxStructure(
+  before: DocxStructureInfo,
+  after: DocxStructureInfo
+): { consistent: boolean; warnings: string[] } {
+  const warnings: string[] = []
+
+  if (before.paragraphCount !== after.paragraphCount) {
+    warnings.push(`段落数变化: ${before.paragraphCount} → ${after.paragraphCount}`)
+  }
+  if (before.tableCount !== after.tableCount) {
+    warnings.push(`表格数变化: ${before.tableCount} → ${after.tableCount}`)
+  }
+  if (before.cellCount !== after.cellCount) {
+    warnings.push(`单元格数变化: ${before.cellCount} → ${after.cellCount}`)
+  }
+
+  return {
+    consistent: warnings.length === 0,
+    warnings,
+  }
+}
+
+// ============================================================
+// 防错位机制：表格关键词锚定 + 固定列宽 + 合并单元格兼容
+// ============================================================
+
+/**
+ * 通过关键词在表格中定位单元格
+ * 不按行列号定位，而是通过单元格内的关键词匹配目标单元格
+ * 完全免疫合并单元格、嵌套表格导致的索引错位
+ */
+function findCellByKeyword(
+  docXml: string,
+  keyword: string
+): { cellXml: string; cellStart: number; cellEnd: number } | null {
+  const cellRegex = /<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g
+  let match
+
+  while ((match = cellRegex.exec(docXml)) !== null) {
+    const cellXml = match[0]
+    // 提取单元格内的所有文本
+    const textMatches = cellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+    let cellText = ''
+    for (const textMatch of textMatches) {
+      const text = textMatch.replace(/<w:t[^>]*>([^<]*)<\/w:t>/, '$1')
+      cellText += text
+    }
+
+    if (cellText.includes(keyword)) {
+      return {
+        cellXml,
+        cellStart: match.index,
+        cellEnd: match.index + match[0].length,
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * 判断单元格是否为合并单元格
+ * 通过检查 <w:gridSpan> 或 <w:vMerge> 标签判断
+ */
+function isMergedCell(cellXml: string): boolean {
+  return cellXml.includes('<w:gridSpan') || cellXml.includes('<w:vMerge')
+}
+
+/**
+ * 在单元格内替换占位符文本
+ * 保留原有段落、字体、对齐方式，只替换占位符
+ */
+function replaceInCell(
+  cellXml: string,
+  placeholder: string,
+  replaceText: string
+): { success: boolean; newCellXml: string } {
+  // 提取单元格内的所有段落
+  const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
+  let match
+  let newCellXml = cellXml
+
+  while ((match = paraRegex.exec(cellXml)) !== null) {
+    const paraXml = match[0]
+    const result = replacePlaceholderInParagraph(paraXml, placeholder, replaceText)
+
+    if (result.success) {
+      newCellXml = newCellXml.replace(paraXml, result.newParagraphXml)
+      return { success: true, newCellXml }
+    }
+  }
+
+  return { success: false, newCellXml }
+}
+
+/**
+ * 设置表格固定列宽（防止内容撑变形）
+ * 在表格属性中添加 <w:tblW> 和 <w:tblLayout w:type="fixed"/>
+ */
+function setTableFixedWidth(tableXml: string, widths?: number[]): string {
+  let newTableXml = tableXml
+
+  // 查找表格属性
+  const tblPrMatch = tableXml.match(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/)
+  if (!tblPrMatch) {
+    return tableXml
+  }
+
+  let tblPrXml = tblPrMatch[0]
+
+  // 添加固定布局（如果不存在）
+  if (!tblPrXml.includes('<w:tblLayout')) {
+    tblPrXml = tblPrXml.replace(
+      '</w:tblPr>',
+      '<w:tblLayout w:type="fixed"/></w:tblPr>'
+    )
+  }
+
+  newTableXml = newTableXml.replace(tblPrMatch[0], tblPrXml)
+
+  // 如果提供了列宽，设置每个单元格的宽度
+  if (widths && widths.length > 0) {
+    const tcRegex = /<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g
+    let cellIndex = 0
+    let match
+
+    while ((match = tcRegex.exec(newTableXml)) !== null) {
+      const cellXml = match[0]
+      const colIndex = cellIndex % widths.length
+
+      if (widths[colIndex]) {
+        // 在单元格属性中添加宽度
+        const tcPrMatch = cellXml.match(/<w:tcPr>([\s\S]*?)<\/w:tcPr>/)
+        if (tcPrMatch) {
+          let tcPrXml = tcPrMatch[0]
+          if (!tcPrXml.includes('<w:tcW')) {
+            tcPrXml = tcPrXml.replace(
+              '</w:tcPr>',
+              `<w:tcW w:w="${widths[colIndex]}" w:type="dxa"/></w:tcPr>`
+            )
+            const newCellXml = cellXml.replace(tcPrMatch[0], tcPrXml)
+            newTableXml = newTableXml.replace(cellXml, newCellXml)
+          }
+        }
+      }
+
+      cellIndex++
+    }
+  }
+
+  return newTableXml
+}
+
+// ============================================================
 // 提取文本（用于 LLM 分析）
 // ============================================================
 
@@ -973,4 +1473,190 @@ export function extractDocxText(rawContent: ArrayBuffer): string {
     const match = t.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/)
     return match ? match[1] : ''
   }).join('')
+}
+
+// ============================================================
+// 方案四：书签填写
+// ============================================================
+
+/**
+ * 通过书签名称填写内容
+ * 书签是 Word 文档中的标记位置，可以精确定位填写位置
+ */
+export async function fillDocxByBookmark(
+  rawContent: ArrayBuffer | string,
+  fields: FormField[]
+): Promise<string> {
+  let buffer: Uint8Array
+  if (typeof rawContent === 'string') {
+    const binaryString = atob(rawContent)
+    buffer = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      buffer[i] = binaryString.charCodeAt(i)
+    }
+  } else {
+    buffer = new Uint8Array(rawContent)
+  }
+
+  const zip = new PizZip(buffer)
+  const docXml = zip.file('word/document.xml')?.asText()
+  if (!docXml) {
+    throw new Error('无法读取 document.xml')
+  }
+
+  let filledXml = docXml
+  const fieldsWithValue = fields.filter(f => f.value && f.location?.type === 'bookmark' && f.location?.bookmarkName)
+
+  console.log(`[docxHandler][Bookmark] Filling ${fieldsWithValue.length} fields by bookmark`)
+
+  for (const field of fieldsWithValue) {
+    const bookmarkName = field.location!.bookmarkName!
+    const value = field.value
+    const escapedValue = escapeXml(value)
+
+    console.log(`[docxHandler][Bookmark] Processing bookmark: "${bookmarkName}" = "${value}"`)
+
+    // 查找书签开始标记
+    const bookmarkStartRegex = new RegExp(`<w:bookmarkStart\\s+w:name="${bookmarkName}"[^>]*\\/?>`, 'g')
+    const startMatch = bookmarkStartRegex.exec(filledXml)
+
+    if (!startMatch) {
+      console.warn(`[docxHandler][Bookmark] Bookmark "${bookmarkName}" not found`)
+      continue
+    }
+
+    const startPos = startMatch.index + startMatch[0].length
+
+    // 查找书签结束标记
+    const bookmarkIdMatch = startMatch[0].match(/w:id="(\d+)"/)
+    if (!bookmarkIdMatch) {
+      console.warn(`[docxHandler][Bookmark] Cannot find bookmark ID for "${bookmarkName}"`)
+      continue
+    }
+
+    const bookmarkId = bookmarkIdMatch[1]
+    const bookmarkEndRegex = new RegExp(`<w:bookmarkEnd\\s+w:id="${bookmarkId}"[^>]*\\/?>`, 'g')
+    const endMatch = bookmarkEndRegex.exec(filledXml)
+
+    if (!endMatch) {
+      console.warn(`[docxHandler][Bookmark] Cannot find end mark for bookmark "${bookmarkName}"`)
+      continue
+    }
+
+    const endPos = endMatch.index
+
+    // 替换书签内的内容
+    const before = filledXml.substring(0, startPos)
+    const after = filledXml.substring(endPos)
+    const newContent = `<w:t xml:space="preserve">${escapedValue}</w:t>`
+
+    filledXml = before + newContent + after
+    console.log(`[docxHandler][Bookmark] ✓ Filled bookmark "${bookmarkName}"`)
+  }
+
+  // 创建全新的 zip 实例
+  const newZip = new PizZip()
+  const allFiles = zip.file(/.*/)
+  for (const zipEntry of allFiles) {
+    if (!zipEntry.dir) {
+      if (zipEntry.name === 'word/document.xml') {
+        newZip.file(zipEntry.name, filledXml)
+      } else {
+        newZip.file(zipEntry.name, zipEntry.asBinary())
+      }
+    }
+  }
+
+  const blob = newZip.generate({ type: 'uint8array' })
+  let binary = ''
+  for (let i = 0; i < blob.length; i++) {
+    binary += String.fromCharCode(blob[i])
+  }
+  return btoa(binary)
+}
+
+// ============================================================
+// 方案五：窗体控件填写
+// ============================================================
+
+/**
+ * 通过窗体控件名称填写内容
+ * 支持文本框、下拉列表、日期选择器等窗体控件
+ */
+export async function fillDocxByFormField(
+  rawContent: ArrayBuffer | string,
+  fields: FormField[]
+): Promise<string> {
+  let buffer: Uint8Array
+  if (typeof rawContent === 'string') {
+    const binaryString = atob(rawContent)
+    buffer = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      buffer[i] = binaryString.charCodeAt(i)
+    }
+  } else {
+    buffer = new Uint8Array(rawContent)
+  }
+
+  const zip = new PizZip(buffer)
+  const docXml = zip.file('word/document.xml')?.asText()
+  if (!docXml) {
+    throw new Error('无法读取 document.xml')
+  }
+
+  let filledXml = docXml
+  const fieldsWithValue = fields.filter(f => f.value && f.location?.type === 'form-field' && f.location?.fieldName)
+
+  console.log(`[docxHandler][FormField] Filling ${fieldsWithValue.length} fields by form field`)
+
+  for (const field of fieldsWithValue) {
+    const fieldName = field.location!.fieldName!
+    const value = field.value
+    const escapedValue = escapeXml(value)
+
+    console.log(`[docxHandler][FormField] Processing form field: "${fieldName}" = "${value}"`)
+
+    // 查找窗体控件 <w:fldSimple> 或 <w:sdt>
+    const fieldRegex = new RegExp(`<w:(?:fldSimple|sdt)\\b[^>]*>[\\s\\S]*?<w:name\\s+w:val="${fieldName}"[\\s\\S]*?<\\/w:(?:fldSimple|sdt)>`, 'g')
+    const fieldMatch = fieldRegex.exec(filledXml)
+
+    if (!fieldMatch) {
+      console.warn(`[docxHandler][FormField] Form field "${fieldName}" not found`)
+      continue
+    }
+
+    // 查找控件内的默认值或占位符
+    const defaultMatch = fieldMatch[0].match(/<w:default\s+w:val="([^"]+)"/)
+    const placeholderMatch = fieldMatch[0].match(/<w:t[^>]*>([^<]*)<\/w:t>/)
+
+    if (defaultMatch || placeholderMatch) {
+      // 替换默认值或占位符
+      const oldContent = defaultMatch ? defaultMatch[1] : placeholderMatch![1]
+      const fieldXml = fieldMatch[0].replace(oldContent, escapedValue)
+      filledXml = filledXml.replace(fieldMatch[0], fieldXml)
+      console.log(`[docxHandler][FormField] ✓ Filled form field "${fieldName}"`)
+    } else {
+      console.warn(`[docxHandler][FormField] Cannot find placeholder in form field "${fieldName}"`)
+    }
+  }
+
+  // 创建全新的 zip 实例
+  const newZip = new PizZip()
+  const allFiles = zip.file(/.*/)
+  for (const zipEntry of allFiles) {
+    if (!zipEntry.dir) {
+      if (zipEntry.name === 'word/document.xml') {
+        newZip.file(zipEntry.name, filledXml)
+      } else {
+        newZip.file(zipEntry.name, zipEntry.asBinary())
+      }
+    }
+  }
+
+  const blob = newZip.generate({ type: 'uint8array' })
+  let binary = ''
+  for (let i = 0; i < blob.length; i++) {
+    binary += String.fromCharCode(blob[i])
+  }
+  return btoa(binary)
 }
