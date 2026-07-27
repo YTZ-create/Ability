@@ -42,6 +42,8 @@ export interface TableInfo {
   isEmpty: boolean
   hasLabel: boolean  // 是否包含标签（如"姓名："）
   hasPlaceholder: boolean  // 是否包含占位符
+  isReadOnly?: boolean  // 是否为只读单元格（题干列）
+  isFillable?: boolean  // 是否为可填写单元格（右侧填写列）
 }
 
 export interface BookmarkInfo {
@@ -228,6 +230,25 @@ function extractTables(docXml: string): TableInfo[] {
         // 检查是否包含占位符
         const hasPlaceholder = /[＿_]{3,}|【[^】]+】|\{[^}]+\}/.test(text)
 
+        // 区域角色划分：识别只读题干列和可填写列
+        let isReadOnly = false
+        let isFillable = false
+        
+        // 规则1：第0列（最左侧）通常是题干列，标记为只读
+        if (colIndex === 0 && !isEmpty && !hasPlaceholder) {
+          isReadOnly = true
+        }
+        
+        // 规则2：第1列及以后的列，如果是空单元格或包含占位符，标记为可填写
+        if (colIndex >= 1 && (isEmpty || hasPlaceholder)) {
+          isFillable = true
+        }
+        
+        // 规则3：包含标签（如"姓名："）的单元格标记为只读
+        if (hasLabel && !hasPlaceholder) {
+          isReadOnly = true
+        }
+
         tables.push({
           rowIndex,
           colIndex,
@@ -237,6 +258,8 @@ function extractTables(docXml: string): TableInfo[] {
           isEmpty,
           hasLabel,
           hasPlaceholder,
+          isReadOnly,
+          isFillable,
         })
 
         colIndex++
@@ -355,7 +378,35 @@ function extractFormFields(docXml: string): FormFieldInfo[] {
 }
 
 /**
- * 提取占位符信息
+ * 占位符真伪判定函数
+ * 只有带下划线格式、【】、{}、书签、内容控件标记的内容才是可修改占位
+ * 普通说明/题干文字禁止替换
+ */
+function isValidPlaceholder(textNodeXml: string, placeholderText: string, type: 'underline' | 'bracket' | 'brace'): boolean {
+  // 规则1：下划线占位符必须带有下划线格式标记 <w:u>
+  if (type === 'underline') {
+    // 检查文本节点所在的 run 是否有下划线格式
+    const hasUnderlineFormat = textNodeXml.includes('<w:u ') || textNodeXml.includes('<w:u/>')
+    // 或者占位符本身是标准的下划线模式（3个以上下划线字符）
+    const isStandardUnderline = /[＿_]{3,}/.test(placeholderText)
+    return hasUnderlineFormat || isStandardUnderline
+  }
+  
+  // 规则2：方括号占位符【】必须是完整的占位符模式
+  if (type === 'bracket') {
+    return /【[^】]+】/.test(placeholderText)
+  }
+  
+  // 规则3：花括号占位符{}必须是完整的占位符模式
+  if (type === 'brace') {
+    return /\{[^}]+\}/.test(placeholderText)
+  }
+  
+  return false
+}
+
+/**
+ * 提取占位符信息（增强版：包含占位符真伪判定）
  */
 function extractPlaceholders(docXml: string): PlaceholderInfo[] {
   const placeholders: PlaceholderInfo[] = []
@@ -367,6 +418,7 @@ function extractPlaceholders(docXml: string): PlaceholderInfo[] {
   while ((match = textNodeRegex.exec(docXml)) !== null) {
     const text = match[1]
     const position = match.index
+    const fullMatch = match[0]  // 包含完整的 <w:t>...</w:t> 标签
 
     // 查找下划线占位符 ____
     const underlineRegex = /([＿_]{3,})/g
@@ -374,6 +426,19 @@ function extractPlaceholders(docXml: string): PlaceholderInfo[] {
     while ((underlineMatch = underlineRegex.exec(text)) !== null) {
       const placeholderText = underlineMatch[1]
       const charOffset = position + underlineMatch.index
+
+      // 占位符真伪判定：检查是否是真正的可修改占位符
+      // 向上查找包含此文本节点的 run 的 XML
+      const runStart = docXml.lastIndexOf('<w:r>', position)
+      const runEnd = docXml.indexOf('</w:r>', position)
+      const runXml = runStart >= 0 && runEnd > runStart 
+        ? docXml.substring(runStart, runEnd + 6) 
+        : fullMatch
+      
+      if (!isValidPlaceholder(runXml, placeholderText, 'underline')) {
+        console.log(`[docxAnalyzer] Skipping false underline placeholder: "${placeholderText}"`)
+        continue
+      }
 
       // 查找所在段落
       const beforeXml = docXml.substring(0, charOffset)
@@ -402,6 +467,12 @@ function extractPlaceholders(docXml: string): PlaceholderInfo[] {
       const placeholderText = bracketMatch[1]
       const charOffset = position + bracketMatch.index
 
+      // 占位符真伪判定
+      if (!isValidPlaceholder(fullMatch, placeholderText, 'bracket')) {
+        console.log(`[docxAnalyzer] Skipping false bracket placeholder: "${placeholderText}"`)
+        continue
+      }
+
       const beforeXml = docXml.substring(0, charOffset)
       const paragraphCount = (beforeXml.match(/<w:p\b/g) || []).length
       const paragraphIndex = paragraphCount > 0 ? paragraphCount - 1 : 0
@@ -422,6 +493,12 @@ function extractPlaceholders(docXml: string): PlaceholderInfo[] {
       const placeholderText = braceMatch[1]
       const charOffset = position + braceMatch.index
 
+      // 占位符真伪判定
+      if (!isValidPlaceholder(fullMatch, placeholderText, 'brace')) {
+        console.log(`[docxAnalyzer] Skipping false brace placeholder: "${placeholderText}"`)
+        continue
+      }
+
       const beforeXml = docXml.substring(0, charOffset)
       const paragraphCount = (beforeXml.match(/<w:p\b/g) || []).length
       const paragraphIndex = paragraphCount > 0 ? paragraphCount - 1 : 0
@@ -436,6 +513,7 @@ function extractPlaceholders(docXml: string): PlaceholderInfo[] {
     }
   }
 
+  console.log(`[docxAnalyzer] Extracted ${placeholders.length} valid placeholders (after authenticity verification)`)
   return placeholders
 }
 

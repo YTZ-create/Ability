@@ -33,6 +33,8 @@ export const FormFillView: React.FC = () => {
   const [showDropdown, setShowDropdown] = useState(false)
   const [methodProgress, setMethodProgress] = useState<Array<{method: string, status: 'trying' | 'success' | 'failed'}>>([])
   const [pendingPlaceholderConfirm, setPendingPlaceholderConfirm] = useState<{fieldId: string; anchorText: string} | null>(null)
+  const [showRetryButton, setShowRetryButton] = useState(false)
+  const [retryType, setRetryType] = useState<'fill' | 'write'>('fill')
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
@@ -254,6 +256,9 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
         }
       )
 
+      // 填写成功后，添加"写入文件"进度项
+      setMethodProgress(prev => [...prev, { method: '写入文件', status: 'trying' }])
+
       const newFileName = activeDocument.fileName.replace(/\.([^.]+)$/, '_filled.$1')
       const newFilePath = activeDocument.filePath.replace(/\.([^.]+)$/, '_filled.$1')
 
@@ -262,6 +267,8 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
       const platform = getPlatform()
       if (!platform) {
         console.error(`[FormFillView] Platform not available!`)
+        // 更新写入文件进度为失败
+        setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
         throw new Error('Platform not available')
       }
 
@@ -292,15 +299,19 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
 
         if (!writeResult.success) {
           console.error(`[FormFillView] Write failed: ${writeResult.error}`)
+          // 更新写入文件进度为失败
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error(`写入文件失败: ${writeResult.error}`)
         }
 
         // 读回验证
         const { content: readBack, error: readError } = await platform.fs.readBinaryFile(newFilePath)
         if (readError) {
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error(`文件写入验证失败：无法读取已写入的文件 — ${readError}`)
         }
         if (!readBack) {
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error('文件写入验证失败：读回的文件内容为空')
         }
 
@@ -310,6 +321,7 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
         // 文件大小必须一致
         if (bytes.length !== readBytes.length) {
           console.error(`[FormFillView] Size mismatch: written=${bytes.length}, read=${readBytes.length}`)
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error(`文件写入验证失败：写入大小 ${bytes.length} 字节，但读回 ${readBytes.length} 字节`)
         }
 
@@ -325,6 +337,7 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
 
         if (matchCount !== compareLen) {
           console.error(`[FormFillView] Content mismatch at byte ${firstMismatch}: written=0x${bytes[firstMismatch].toString(16)}, read=0x${readBytes[firstMismatch].toString(16)}`)
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error(`文件写入验证失败：第 ${firstMismatch} 字节处数据不匹配（写入 0x${bytes[firstMismatch].toString(16)}，读回 0x${readBytes[firstMismatch].toString(16)}）`)
         }
 
@@ -348,9 +361,13 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
         const writeResult = await platform.fs.writeFile(newFilePath, filledContent)
         console.log(`[FormFillView] writeFile result:`, writeResult)
         if (!writeResult.success) {
+          setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p))
           throw new Error(`写入文件失败: ${writeResult.error}`)
         }
       }
+
+      // 写入成功，更新进度
+      setMethodProgress(prev => prev.map(p => p.method === '写入文件' ? { ...p, status: 'success' as const } : p))
 
       const filledCount = activeDocument.fields.filter(f => f.value).length
       setBubbles((b) => {
@@ -376,9 +393,55 @@ ${newFilePath}
         endSession(newFilePath)
       }, 1000)
     } catch (err: any) {
-      addBubble('agent', `填写失败：${err.message}`)
+      // 确保写入文件进度显示为失败
+      setMethodProgress(prev => {
+        const hasWriteItem = prev.some(p => p.method === '写入文件')
+        if (hasWriteItem) {
+          return prev.map(p => p.method === '写入文件' ? { ...p, status: 'failed' as const } : p)
+        }
+        return prev
+      })
+      
+      // 添加带重试按钮的错误消息
+      const errorMessage = err.message || '未知错误'
+      const isWriteError = errorMessage.includes('写入文件失败') || errorMessage.includes('Platform not available')
+      
+      if (isWriteError) {
+        addBubble('agent', `❌ **文件写入失败**
+
+${errorMessage}
+
+**填写内容已成功生成**，但保存到磁盘时出错。可能原因：
+- 文件路径包含特殊字符
+- 磁盘空间不足
+- 文件被其他程序占用
+
+请点击下方 **"重试写入"** 按钮重新保存。`)
+        setRetryType('write')
+      } else {
+        addBubble('agent', `❌ **填写失败**
+
+${errorMessage}
+
+请点击下方 **"重新填写"** 按钮重新尝试。`)
+        setRetryType('fill')
+      }
+      setShowRetryButton(true)
     } finally {
       setIsProcessing(false)
+    }
+  }
+
+  // 重试处理
+  const handleRetry = async () => {
+    setShowRetryButton(false)
+    if (retryType === 'write') {
+      // 重试写入：重新调用 handleFillComplete
+      await handleFillComplete()
+    } else {
+      // 重试填写：重新显示填写方式选择器
+      addBubble('agent', '好的，让我们重新尝试填写。请选择文档生成方式：')
+      setShowFillMethodSelector(true)
     }
   }
 
@@ -544,6 +607,33 @@ ${newFilePath}
                     )}
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 重试按钮 - 失败后显示 */}
+        {showRetryButton && (
+          <div className="flex gap-3 px-4 py-2">
+            <div className="w-8 h-8 rounded-sm flex-shrink-0 flex items-center justify-center border-2 border-brutal-black mt-1" style={{ backgroundColor: '#F472B6' }}>
+              <FileInput size={16} color="#141111" />
+            </div>
+            <div className="max-w-[75%] min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-xs">Ethan</span>
+                <span className="text-[10px] text-black/70 font-mono">
+                  {new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <div className="bg-white border-2 border-l-4 border-brutal-black p-3 shadow-brutal-sm">
+                <button
+                  onClick={handleRetry}
+                  disabled={isProcessing}
+                  className="btn-brutal bg-brutal-yellow w-full text-sm disabled:opacity-50"
+                >
+                  <Check size={16} color="#141111" className="inline mr-1" />
+                  {retryType === 'write' ? '重试写入文件' : '重新填写'}
+                </button>
               </div>
             </div>
           </div>

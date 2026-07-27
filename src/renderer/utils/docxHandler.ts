@@ -378,6 +378,7 @@ export async function fillDocxFile(
     // ============================================================
     // 新策略：段落级 Run 合并替换（解决 Run 碎片化导致的下划线错位）
     // 优先级最高，因为它能处理占位符被拆分到多个 Run 的情况
+    // 集成方案3：下划线优化 - 只改下划线区域，固定文字完全不动
     // ============================================================
     if (!filled) {
       const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g
@@ -394,6 +395,18 @@ export async function fillDocxFile(
 
         // 情况1：标签和占位符在同一段落（如 "姓名：________"）
         if (paraText.includes(label)) {
+          // 方案3：下划线优化 - 优先尝试只改下划线区域
+          const fixedPrefix = label + (paraText.substring(paraText.indexOf(label) + label.length).match(/^[：:\s]*/)?.[0] || '')
+          const underlineOptResult = fillTrailingUnderline(paraXml, fixedPrefix, escapedValue)
+          if (underlineOptResult.success) {
+            filledXml = filledXml.substring(0, paraMatch.index) + underlineOptResult.newParaXml + filledXml.substring(paraMatch.index + paraMatch[0].length)
+            filled = true
+            filledCount++
+            console.log(`[docxHandler][Smart] ✓ Strategy -1a: Underline optimization - only modify underline area`)
+            break
+          }
+
+          // 降级到原有的 Run 合并替换逻辑
           const afterLabel = paraText.substring(paraText.indexOf(label) + label.length)
           const placeholderMatch = afterLabel.match(/^[：:\s]*([＿_]{2,}|[（(][\s]*[)）])/)
 
@@ -523,45 +536,63 @@ export async function fillDocxFile(
 
     // ============================================================
     // 新策略：表格关键词锚定 - 直接用 label 定位（无 anchorText 时）
+    // 集成方案1：列索引强锁定 + 方案2：单元格读写白名单
     // ============================================================
     if (!filled && hasTable) {
-      const labelCell = findCellByKeyword(filledXml, label)
-      if (labelCell) {
-        // 查找右侧相邻单元格
-        const afterLabelCell = filledXml.substring(labelCell.cellEnd)
-        const nextCellMatch = afterLabelCell.match(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/)
+      // 方案1：列索引强锁定 - 通过左侧题干定位，只往右边填写
+      const columnLockResult = fillTableRightCellByTopic(filledXml, label, escapedValue)
+      if (columnLockResult.success) {
+        filledXml = columnLockResult.newDocXml
+        filled = true
+        filledCount++
+        console.log(`[docxHandler][Smart] ✓ Strategy -2c: Column lock - left topic to right cell`)
+      } else {
+        // 降级到原有的关键词锚定逻辑
+        const labelCell = findCellByKeyword(filledXml, label)
+        if (labelCell) {
+          // 方案2：检查是否为只读单元格（白名单机制）
+          if (isCellReadOnly(labelCell.cellXml, 0)) {
+            console.log(`[docxHandler][Smart] ⚠ Label cell is read-only, skipping`)
+          } else {
+            // 查找右侧相邻单元格
+            const afterLabelCell = filledXml.substring(labelCell.cellEnd)
+            const nextCellMatch = afterLabelCell.match(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/)
 
-        if (nextCellMatch) {
-          const nextCellXml = nextCellMatch[0]
-          const nextCellStart = labelCell.cellEnd + nextCellMatch.index
-          const nextCellEnd = nextCellStart + nextCellXml.length
+            if (nextCellMatch) {
+              const nextCellXml = nextCellMatch[0]
+              const nextCellStart = labelCell.cellEnd + nextCellMatch.index
+              const nextCellEnd = nextCellStart + nextCellXml.length
 
-          // 检查是否为合并单元格
-          if (!isMergedCell(nextCellXml)) {
-            const cellTextMatches = nextCellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
-            let cellText = ''
-            for (const tm of cellTextMatches) {
-              const m = tm.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
-              if (m) cellText += m[1]
-            }
+              // 方案2：检查右侧单元格是否为只读
+              if (isCellReadOnly(nextCellXml, 1)) {
+                console.log(`[docxHandler][Smart] ⚠ Right cell is read-only, skipping`)
+              } else if (!isMergedCell(nextCellXml)) {
+                const cellTextMatches = nextCellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+                let cellText = ''
+                for (const tm of cellTextMatches) {
+                  const m = tm.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
+                  if (m) cellText += m[1]
+                }
 
-            // 替换占位符或填入空单元格
-            const placeholderMatch = cellText.match(/([＿_]{2,}|[（(][\s]*[)）])/)
-            if (placeholderMatch) {
-              const result = replaceInCell(nextCellXml, placeholderMatch[0], escapedValue)
-              if (result.success) {
-                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
-                filled = true
-                filledCount++
-                console.log(`[docxHandler][Smart] ✓ Strategy -2c: Table label keyword anchor + cell replacement`)
-              }
-            } else if (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim())) {
-              const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
-              if (result.success) {
-                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
-                filled = true
-                filledCount++
-                console.log(`[docxHandler][Smart] ✓ Strategy -2d: Table label keyword anchor + empty cell fill`)
+                // 替换占位符或填入空单元格
+                const placeholderMatch = cellText.match(/([＿_]{2,}|[（(][\s]*[)）])/)
+                if (placeholderMatch) {
+                  const result = replaceInCell(nextCellXml, placeholderMatch[0], escapedValue)
+                  if (result.success) {
+                    filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                    filled = true
+                    filledCount++
+                    console.log(`[docxHandler][Smart] ✓ Strategy -2d: Table label keyword anchor + cell replacement`)
+                  }
+                } else if (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim())) {
+                  const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
+                  if (result.success) {
+                    filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                    filled = true
+                    filledCount++
+                    console.log(`[docxHandler][Smart] ✓ Strategy -2e: Table label keyword anchor + empty cell fill`)
+                  }
+                }
               }
             }
           }
@@ -1354,6 +1385,226 @@ function findCellByKeyword(
   }
 
   return null
+}
+
+/**
+ * 方案1：列索引强锁定 - 通过左侧题干定位，只往右边填写
+ * 明确表格每行的第0列=左侧只读题干列，第1列=右侧填写列
+ * 强制只操作同行的右列单元格，完全跳过左列
+ */
+function fillTableRightCellByTopic(
+  docXml: string,
+  topicKeyword: string,
+  fillContent: string
+): { success: boolean; newDocXml: string } {
+  console.log(`[docxHandler][ColumnLock] 尝试列索引强锁定: 题干="${topicKeyword.substring(0, 30)}..."`)
+  
+  // 查找所有表格
+  const tableRegex = /<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g
+  let tableMatch
+  let newDocXml = docXml
+
+  while ((tableMatch = tableRegex.exec(docXml)) !== null) {
+    const tableXml = tableMatch[0]
+    let newTableXml = tableXml
+
+    // 查找所有行
+    const rowRegex = /<w:tr\b[^>]*>[\s\S]*?<\/w:tr>/g
+    let rowMatch
+
+    while ((rowMatch = rowRegex.exec(tableXml)) !== null) {
+      const rowXml = rowMatch[0]
+
+      // 提取所有单元格
+      const cells: { xml: string; text: string; start: number; end: number }[] = []
+      const cellRegex = /<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g
+      let cellMatch
+
+      while ((cellMatch = cellRegex.exec(rowXml)) !== null) {
+        const cellXml = cellMatch[0]
+        const textMatches = cellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+        let cellText = ''
+        for (const textMatch of textMatches) {
+          const text = textMatch.replace(/<w:t[^>]*>([^<]*)<\/w:t>/, '$1')
+          cellText += text
+        }
+        cells.push({
+          xml: cellXml,
+          text: cellText,
+          start: cellMatch.index,
+          end: cellMatch.index + cellMatch[0].length,
+        })
+      }
+
+      // 方案1核心：第0列=题干列，第1列=填写列
+      if (cells.length >= 2) {
+        const leftCell = cells[0]  // 第0列：只读题干列
+        const rightCell = cells[1]  // 第1列：右侧填写列
+
+        // 仅匹配左栏的题干文本，不修改左栏内容
+        if (leftCell.text.includes(topicKeyword)) {
+          console.log(`[docxHandler][ColumnLock] ✓ 找到题干: "${topicKeyword.substring(0, 30)}..."`)
+          console.log(`[docxHandler][ColumnLock]   左列(只读): "${leftCell.text.substring(0, 50)}..."`)
+          console.log(`[docxHandler][ColumnLock]   右列(填写): "${rightCell.text.substring(0, 50)}..."`)
+
+          // 只在右栏执行填写逻辑
+          let newRightCellXml = rightCell.xml
+
+          // 策略：替换右栏中的占位符或填入空单元格
+          const placeholderMatch = rightCell.text.match(/([＿_]{2,}|[（(][\s]*[)）])/)
+          if (placeholderMatch) {
+            // 有占位符，替换占位符
+            const result = replaceInCell(rightCell.xml, placeholderMatch[0], fillContent)
+            if (result.success) {
+              newRightCellXml = result.newCellXml
+              console.log(`[docxHandler][ColumnLock] ✓ 替换占位符成功`)
+            }
+          } else if (rightCell.text.trim() === '' || /^[：:\s]+$/.test(rightCell.text.trim())) {
+            // 空单元格，直接填入
+            const result = replaceInCell(rightCell.xml, rightCell.text.trim() || ' ', fillContent)
+            if (result.success) {
+              newRightCellXml = result.newCellXml
+              console.log(`[docxHandler][ColumnLock] ✓ 填入空单元格成功`)
+            }
+          }
+
+          if (newRightCellXml !== rightCell.xml) {
+            // 更新行XML
+            const newRowXml = rowXml.substring(0, rightCell.start) + newRightCellXml + rowXml.substring(rightCell.end)
+            newTableXml = newTableXml.replace(rowXml, newRowXml)
+            newDocXml = newDocXml.replace(tableXml, newTableXml)
+            return { success: true, newDocXml }
+          }
+        }
+      }
+    }
+  }
+
+  console.log(`[docxHandler][ColumnLock] ✗ 未找到匹配的题干`)
+  return { success: false, newDocXml: docXml }
+}
+
+/**
+ * 方案2：单元格读写白名单 - 提前给所有表格列标注角色
+ * 题干说明列开启只读锁定，代码遍历写入时直接跳过锁定单元格
+ */
+function isCellReadOnly(cellXml: string, colIndex: number): boolean {
+  // 规则1：第0列（最左侧）通常是题干列，标记为只读
+  if (colIndex === 0) {
+    console.log(`[docxHandler][Whitelist] 列${colIndex}标记为只读(题干列)`)
+    return true
+  }
+
+  // 规则2：提取单元格文本，检查是否包含标签（冒号结尾）
+  const textMatches = cellXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+  let cellText = ''
+  for (const textMatch of textMatches) {
+    const text = textMatch.replace(/<w:t[^>]*>([^<]*)<\/w:t>/, '$1')
+    cellText += text
+  }
+
+  // 如果包含标签（如"姓名："）且没有占位符，标记为只读
+  const hasLabel = /[：:]$/.test(cellText.trim())
+  const hasPlaceholder = /[＿_]{3,}|【[^】]+】|\{[^}]+\}/.test(cellText)
+
+  if (hasLabel && !hasPlaceholder) {
+    console.log(`[docxHandler][Whitelist] 单元格标记为只读(含标签): "${cellText.substring(0, 30)}..."`)
+    return true
+  }
+
+  return false
+}
+
+/**
+ * 方案3：下划线填写优化 - 只改下划线区域，固定文字完全不动
+ * 锁定固定前缀不修改，只处理段落末尾带下划线格式的占位片段
+ */
+function fillTrailingUnderline(
+  paraXml: string,
+  fixedPrefix: string,
+  fillText: string
+): { success: boolean; newParaXml: string } {
+  console.log(`[docxHandler][UnderlineOpt] 尝试下划线优化填写: 前缀="${fixedPrefix.substring(0, 30)}..."`)
+
+  // 提取段落的所有 run
+  const runs: { xml: string; text: string; hasUnderline: boolean }[] = []
+  const runRegex = /<w:r\b[^>]*>[\s\S]*?<\/w:r>/g
+  let match
+
+  while ((match = runRegex.exec(paraXml)) !== null) {
+    const runXml = match[0]
+    const textMatches = runXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
+    let textContent = ''
+    for (const textMatch of textMatches) {
+      const text = textMatch.replace(/<w:t[^>]*>([^<]*)<\/w:t>/, '$1')
+      textContent += text
+    }
+
+    // 检查是否有下划线格式
+    const hasUnderline = runXml.includes('<w:u')
+
+    runs.push({
+      xml: runXml,
+      text: textContent,
+      hasUnderline,
+    })
+  }
+
+  // 拼接完整段落文本
+  const fullText = runs.map(r => r.text).join('')
+
+  // 检查是否以固定前缀开头
+  if (!fullText.startsWith(fixedPrefix)) {
+    console.log(`[docxHandler][UnderlineOpt] ✗ 段落不以固定前缀开头`)
+    return { success: false, newParaXml: paraXml }
+  }
+
+  // 查找带下划线格式的占位 run
+  let newParaXml = paraXml
+  let foundUnderlineRun = false
+
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i]
+
+    // 仅匹配带下划线格式的占位 run
+    if (run.hasUnderline && /[＿_]/.test(run.text)) {
+      console.log(`[docxHandler][UnderlineOpt] ✓ 找到下划线 run: "${run.text.substring(0, 30)}..."`)
+
+      // 替换下划线内容为填写内容，继承原有下划线样式
+      const newRunXml = run.xml.replace(
+        /<w:t[^>]*>[^<]*<\/w:t>/g,
+        `<w:t xml:space="preserve">${fillText}</w:t>`
+      )
+
+      // 确保保留下划线格式
+      let finalRunXml = newRunXml
+      if (!newRunXml.includes('<w:u')) {
+        // 添加下划线格式
+        const rPrMatch = newRunXml.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/)
+        if (rPrMatch) {
+          finalRunXml = newRunXml.replace('</w:rPr>', '<w:u w:val="single"/></w:rPr>')
+        } else {
+          // 没有 rPr，添加一个
+          finalRunXml = newRunXml.replace(
+            /^<w:r([^>]*)>/,
+            '<w:r$1><w:rPr><w:u w:val="single"/></w:rPr>'
+          )
+        }
+      }
+
+      newParaXml = newParaXml.replace(run.xml, finalRunXml)
+      foundUnderlineRun = true
+      console.log(`[docxHandler][UnderlineOpt] ✓ 替换下划线内容成功`)
+      break  // 只替换第一个带下划线的 run
+    }
+  }
+
+  if (!foundUnderlineRun) {
+    console.log(`[docxHandler][UnderlineOpt] ✗ 未找到带下划线格式的占位 run`)
+    return { success: false, newParaXml: paraXml }
+  }
+
+  return { success: true, newParaXml }
 }
 
 /**
