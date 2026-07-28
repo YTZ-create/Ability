@@ -4,6 +4,7 @@ import { FileOutput } from 'lucide-react'
 import { callLLM } from '../utils/llm'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTokenUsageStore } from '../stores/tokenUsageStore'
+import type { AnalysisStep } from '../stores/chatStore'
 import { extractDocumentText } from '../utils/docParser'
 import { fillDocxFile, fillDocxWithDOMParser, fillDocxWithWordCOMBase64, fillDocxByBookmark, fillDocxByFormField, type FillMethod } from '../utils/docxHandler'
 import { fillXlsxWithXml, fillXlsxWithExcelCOM } from '../utils/xlsxHandler'
@@ -83,43 +84,82 @@ export class FormFillerAgent extends BaseAgent {
 - 用 Markdown 格式回复，语言: 中文。`,
   }
 
-  async extractFieldsFromDoc(filePath: string): Promise<{ fields: FormField[]; content: string; rawContent: string }> {
+  async extractFieldsFromDoc(
+    filePath: string,
+    onProgress?: (steps: AnalysisStep[], fileName: string) => void
+  ): Promise<{ fields: FormField[]; content: string; rawContent: string }> {
     const dotIndex = filePath.lastIndexOf('.')
     const ext = dotIndex === -1 ? '' : filePath.substring(dotIndex).toLowerCase()
+    const fileName = filePath.split(/[/\\]/).pop() || filePath
     console.log('[FormFiller] Reading file:', filePath, 'ext:', ext)
+
+    // 定义分析步骤
+    const steps: AnalysisStep[] = [
+      { key: 'read', label: '读取文件', status: 'active' },
+      { key: 'extract-text', label: '提取文档文本', status: 'pending' },
+      { key: 'analyze-structure', label: '分析文档结构', status: 'pending' },
+      { key: 'build-prompt', label: '构建分析提示词', status: 'pending' },
+      { key: 'llm-extract', label: 'AI 提取待填项', status: 'pending' },
+      { key: 'validate', label: '交叉验证结果', status: 'pending' },
+    ]
+
+    const reportProgress = () => {
+      if (onProgress) {
+        onProgress([...steps], fileName)
+      }
+    }
+
+    // 初始报告
+    reportProgress()
 
     let rawContent: string
     let content: string
     let arrayBuffer: ArrayBuffer | undefined
 
     // ========== 第一步：读取文件 ==========
-    if (['.docx', '.pdf'].includes(ext)) {
-      console.log('[FormFiller] Calling readBinaryFile for:', filePath)
-      const result = await this.platform.fs.readBinaryFile(filePath)
-      console.log('[FormFiller] readBinaryFile result - error:', result.error, 'arrayBuffer:', result.content ? `byteLength=${result.content.byteLength}` : 'null')
-      if (result.error || !result.content) {
-        throw new Error(result.error || '无法读取文件')
+    try {
+      if (['.docx', '.pdf'].includes(ext)) {
+        console.log('[FormFiller] Calling readBinaryFile for:', filePath)
+        const result = await this.platform.fs.readBinaryFile(filePath)
+        console.log('[FormFiller] readBinaryFile result - error:', result.error, 'arrayBuffer:', result.content ? `byteLength=${result.content.byteLength}` : 'null')
+        if (result.error || !result.content) {
+          steps[0].status = 'error'
+          reportProgress()
+          throw new Error(result.error || '无法读取文件')
+        }
+        arrayBuffer = result.content
+        const bytes = new Uint8Array(arrayBuffer)
+        let binary = ''
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i])
+        }
+        rawContent = btoa(binary)
+        console.log('[FormFiller] rawContent base64 length:', rawContent.length)
+        content = await extractDocumentText(filePath, arrayBuffer, ext)
+        console.log('[FormFiller] extractDocumentText returned, content length:', content.length)
+      } else {
+        const result = await this.platform.fs.readFile(filePath)
+        if (result.error || !result.content) {
+          steps[0].status = 'error'
+          reportProgress()
+          throw new Error(result.error || '无法读取文件')
+        }
+        rawContent = result.content
+        content = await extractDocumentText(filePath, rawContent, ext)
       }
-      arrayBuffer = result.content
-      const bytes = new Uint8Array(arrayBuffer)
-      let binary = ''
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i])
-      }
-      rawContent = btoa(binary)
-      console.log('[FormFiller] rawContent base64 length:', rawContent.length)
-      content = await extractDocumentText(filePath, arrayBuffer, ext)
-      console.log('[FormFiller] extractDocumentText returned, content length:', content.length)
-    } else {
-      const result = await this.platform.fs.readFile(filePath)
-      if (result.error || !result.content) {
-        throw new Error(result.error || '无法读取文件')
-      }
-      rawContent = result.content
-      content = await extractDocumentText(filePath, rawContent, ext)
+
+      steps[0].status = 'done'
+      steps[1].status = 'active'
+      reportProgress()
+    } catch (err) {
+      steps[0].status = 'error'
+      reportProgress()
+      throw err
     }
 
     if (!content.trim()) {
+      steps[1].status = 'error'
+      reportProgress()
       throw new Error('文档内容为空或无法解析。请确认文件是有效的 docx/pdf 格式。')
     }
 
@@ -146,6 +186,11 @@ export class FormFillerAgent extends BaseAgent {
         console.warn('[FormFiller] Xlsx structure analysis failed:', e.message)
       }
     }
+
+    steps[1].status = 'done'
+    steps[2].status = 'done'
+    steps[3].status = 'active'
+    reportProgress()
 
     // ========== 第三步：构建 LLM 提示词（结构感知） ==========
     const maxContentLength = 12000

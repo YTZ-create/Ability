@@ -275,7 +275,9 @@ export const ChatInput: React.FC = () => {
 
           try {
             console.log('[FormFiller Direct] Starting extractFieldsFromDoc for:', targetFile.path)
-            const { fields, content, rawContent } = await agent.extractFieldsFromDoc(targetFile.path)
+            const { fields, content, rawContent } = await agent.extractFieldsFromDoc(targetFile.path, (steps, fileName) => {
+              useChatStore.getState().updateAnalysisProgress({ steps, fileName })
+            })
             console.log('[FormFiller Direct] Extracted fields:', fields.length, 'content length:', content.length)
             console.log('[FormFiller Direct] Content preview:', content.substring(0, 200))
             const doc: FormDocument = {
@@ -440,7 +442,9 @@ export const ChatInput: React.FC = () => {
 
                     try {
                       console.log('[Dispatch] Starting extractFieldsFromDoc for:', targetFile.path)
-                      const { fields, content, rawContent } = await subAgent.extractFieldsFromDoc(targetFile.path)
+                      const { fields, content, rawContent } = await subAgent.extractFieldsFromDoc(targetFile.path, (steps, fileName) => {
+                        useChatStore.getState().updateAnalysisProgress({ steps, fileName })
+                      })
                       console.log('[Dispatch] Extracted fields:', fields.length, 'content length:', content.length)
                       console.log('[Dispatch] Content preview:', content.substring(0, 200))
                       const doc: FormDocument = {

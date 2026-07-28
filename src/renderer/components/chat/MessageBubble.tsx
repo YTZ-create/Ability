@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../stores/chatStore'
@@ -6,6 +6,7 @@ import { formatChatTime } from '../../utils/formatters'
 import { Bot, User, Info, Sparkles, FolderSearch, Code2, FileText, FolderCog, Brain, FlaskConical, FileOutput } from 'lucide-react'
 import { agentRegistry } from '../../agents/registry'
 import { AgentCard } from './AgentCard'
+import { AnalysisProgress } from './AnalysisProgress'
 import { cleanHandoffContent } from '../../utils/handoff'
 import type { AgentConfig } from '../../agents/base'
 
@@ -22,6 +23,33 @@ const AGENT_ICONS: Record<string, React.ComponentType<{ size?: number | string; 
 export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   const [showCard, setShowCard] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<AgentConfig | null>(null)
+  const [fadingOut, setFadingOut] = useState(false)
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 当进度完成时，延迟淡出
+  useEffect(() => {
+    if (message.analysisProgress) {
+      const isComplete = message.analysisProgress.steps.every(s => s.status === 'done')
+      const hasError = message.analysisProgress.steps.some(s => s.status === 'error')
+      
+      if (isComplete || hasError) {
+        // 完成后停留 1.5 秒再淡出
+        fadeTimerRef.current = setTimeout(() => {
+          setFadingOut(true)
+        }, 1500)
+      } else {
+        setFadingOut(false)
+      }
+    } else {
+      setFadingOut(false)
+    }
+
+    return () => {
+      if (fadeTimerRef.current) {
+        clearTimeout(fadeTimerRef.current)
+      }
+    }
+  }, [message.analysisProgress])
 
   if (message.role === 'system') {
     return <div className="msg-system flex items-center justify-center gap-2"><Info size={12} />{message.content}</div>
@@ -63,7 +91,15 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
           </div>
           <div className={isAgent ? 'msg-agent bg-white border-2 border-l-4 border-brutal-black p-3 shadow-brutal-sm' : 'msg-user'}>
             {isAgent ? (
-              <div className="prose prose-sm max-w-none text-sm leading-relaxed"><ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>{message.content === '' && <span className="inline-block w-2 h-4 bg-brutal-black animate-pulse ml-0.5 align-middle" />}</div>
+              <div className="prose prose-sm max-w-none text-sm leading-relaxed">
+                {message.analysisProgress && (
+                  <div className="mb-3" style={{ opacity: fadingOut ? 0 : 1, transform: fadingOut ? 'translateY(-8px)' : 'translateY(0)', transition: 'opacity 0.5s ease-out, transform 0.5s ease-out', maxHeight: fadingOut ? 0 : '400px', overflow: 'hidden' }}>
+                    <AnalysisProgress steps={message.analysisProgress.steps} fileName={message.analysisProgress.fileName} fadingOut={fadingOut} />
+                  </div>
+                )}
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>
+                {message.content === '' && !message.analysisProgress && <span className="inline-block w-2 h-4 bg-brutal-black animate-pulse ml-0.5 align-middle" />}
+              </div>
             ) : (
               <div className="text-sm leading-relaxed whitespace-pre-wrap">{String(message.content)}</div>
             )}

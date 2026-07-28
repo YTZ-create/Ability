@@ -24,6 +24,17 @@ export interface SearchResult {
   matches: { line: number; content: string }[]
 }
 
+export interface AnalysisStep {
+  key: string
+  label: string
+  status: 'pending' | 'active' | 'done' | 'error'
+}
+
+export interface AnalysisProgressState {
+  steps: AnalysisStep[]
+  fileName: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'agent' | 'system'
@@ -33,6 +44,7 @@ export interface ChatMessage {
   timestamp: number
   files?: FileEntry[]
   searchResults?: SearchResult[]
+  analysisProgress?: AnalysisProgressState
 }
 
 export interface AgentConversationMessage {
@@ -65,6 +77,7 @@ interface ChatState {
   setInputValue: (v: string) => void
   addMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => void
   updateLastMessage: (content: string) => void
+  updateAnalysisProgress: (progress: AnalysisProgressState) => void
   addAgentConversation: (msg: Omit<AgentConversationMessage, 'id' | 'timestamp'>) => void
   clearAgentConversation: () => void
   clearMessages: () => void
@@ -110,10 +123,20 @@ export const useChatStore = create<ChatState>((set) => ({
       const messages = [...s.messages]
       const lastIdx = messages.length - 1
       if (lastIdx >= 0 && messages[lastIdx].role === 'agent') {
-        messages[lastIdx] = { ...messages[lastIdx], content }
+        messages[lastIdx] = { ...messages[lastIdx], content, analysisProgress: undefined }
       }
       // 使用防抖持久化，避免频繁写入
       debouncedPersist(messages)
+      return { messages }
+    }),
+
+  updateAnalysisProgress: (progress: AnalysisProgressState) =>
+    set((s) => {
+      const messages = [...s.messages]
+      const lastIdx = messages.length - 1
+      if (lastIdx >= 0 && messages[lastIdx].role === 'agent') {
+        messages[lastIdx] = { ...messages[lastIdx], analysisProgress: progress }
+      }
       return { messages }
     }),
 

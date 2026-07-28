@@ -43,7 +43,9 @@ export const FileSelector: React.FC = () => {
     try {
       console.log('[FileSelector] Starting extractFieldsFromDoc for:', selectedFile.path)
       console.log('[FileSelector] File details:', { name: selectedFile.name, ext: selectedFile.ext, path: selectedFile.path, size: selectedFile.size })
-      const { fields, content, rawContent } = await agent.extractFieldsFromDoc(selectedFile.path)
+      const { fields, content, rawContent } = await agent.extractFieldsFromDoc(selectedFile.path, (steps, fileName) => {
+        useChatStore.getState().updateAnalysisProgress({ steps, fileName })
+      })
       console.log('[FileSelector] Extracted fields:', fields.length, 'content length:', content.length)
       const doc: FormDocument = {
         filePath: selectedFile.path,
