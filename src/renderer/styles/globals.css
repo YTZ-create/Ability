@@ -92,10 +92,12 @@
 
   .msg-agent {
     @apply border-l-4 border-brutal-yellow pl-4 py-2;
+    user-select: text;
   }
   .msg-user {
     @apply bg-brutal-black text-white px-4 py-2;
     box-shadow: 4px 4px 0px #FFD440;
+    user-select: text;
   }
   .msg-system {
     @apply text-black/80 text-sm italic text-center py-2;

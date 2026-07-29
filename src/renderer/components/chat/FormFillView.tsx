@@ -492,7 +492,7 @@ ${errorMessage}
                 </span>
               </div>
               <div className={bubble.role === 'agent'
-                ? 'bg-white border-2 border-l-4 border-brutal-black p-3 shadow-brutal-sm'
+                ? 'msg-agent bg-white border-2 border-l-4 border-brutal-black p-3 shadow-brutal-sm'
                 : 'msg-user'}>
                 <div className="prose prose-sm max-w-none text-sm leading-relaxed">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{bubble.content}</ReactMarkdown>
