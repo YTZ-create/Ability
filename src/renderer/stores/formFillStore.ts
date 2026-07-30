@@ -92,18 +92,17 @@ export const useFormFillStore = create<FormFillState>((set, get) => ({
   setFillMethod: (method) => set({ fillMethod: method }),
 
   endSession: (filledFilePath?: string) => {
-    // 如果最后一条 Agent 消息还是过时的填写提示，更新为结束语
+    // 从后往前找到最后一条 Agent 消息，如果是过时的填写提示则替换为结束语
     const state = useChatStore.getState()
     const msgs = state.messages
-    const lastIdx = msgs.length - 1
-    if (lastIdx >= 0 && msgs[lastIdx].role === 'agent') {
-      const lastContent = msgs[lastIdx].content
-      const stalePatterns = ['请在下方勾选', '开始填写', '提取到', '待填项']
-      if (stalePatterns.some(p => lastContent.includes(p))) {
+    const stalePatterns = ['请在下方勾选', '开始填写', '提取到', '待填项']
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'agent' && stalePatterns.some(p => msgs[i].content.includes(p))) {
         const endMsg = filledFilePath
           ? `✅ 表单填写会话已结束。填写后的文件已保存至：\n${filledFilePath}\n\n如需继续填写，请重新发送文档。`
-          : '✅ 表单填写会话已结束。如需继续填写，请重新发送文档。'
-        state.updateLastMessage(endMsg)
+          : '已手动退出，项目终止'
+        state.updateMessageByIndex(i, endMsg)
+        break
       }
     }
     set({
@@ -114,5 +113,8 @@ export const useFormFillStore = create<FormFillState>((set, get) => ({
       availableFiles: [],
       isProcessing: false,
     })
+    // 关键修复：退出表单填写会话时，必须把 activeAgentId 重置为 null
+    // 否则后续消息会因 activeAgentId 仍为 'form-filler' 而被错误路由到 Ethan
+    state.setActiveAgent(null)
   },
 }))

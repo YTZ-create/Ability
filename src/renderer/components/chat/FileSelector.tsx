@@ -75,6 +75,9 @@ export const FileSelector: React.FC = () => {
         useChatStore.getState().updateLastMessage(`❌ 分析失败: ${err.message}\n\n文件: ${selectedFile.name}\n路径: ${selectedFile.path}\n\n请检查文件是否为有效的文档格式（.docx, .pdf, .txt 等）。`)
       }
       setExtracting(false)
+      // 分析失败时重置路由状态，防止后续消息被错误路由到 Ethan
+      useChatStore.getState().setActiveAgent(null)
+      useFormFillStore.getState().setIsFormFillingSession(false)
     }
   }
 

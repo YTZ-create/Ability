@@ -77,6 +77,7 @@ interface ChatState {
   setInputValue: (v: string) => void
   addMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => void
   updateLastMessage: (content: string) => void
+  updateMessageByIndex: (index: number, content: string) => void
   updateAnalysisProgress: (progress: AnalysisProgressState) => void
   addAgentConversation: (msg: Omit<AgentConversationMessage, 'id' | 'timestamp'>) => void
   clearAgentConversation: () => void
@@ -126,6 +127,16 @@ export const useChatStore = create<ChatState>((set) => ({
         messages[lastIdx] = { ...messages[lastIdx], content, analysisProgress: undefined }
       }
       // 使用防抖持久化，避免频繁写入
+      debouncedPersist(messages)
+      return { messages }
+    }),
+
+  updateMessageByIndex: (index: number, content: string) =>
+    set((s) => {
+      const messages = [...s.messages]
+      if (index >= 0 && index < messages.length) {
+        messages[index] = { ...messages[index], content, analysisProgress: undefined }
+      }
       debouncedPersist(messages)
       return { messages }
     }),

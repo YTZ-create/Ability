@@ -80,8 +80,8 @@ export class LeaderAgent extends BaseAgent {
       return await this.answerSelfIntroduction(onToken)
     }
 
-    // Step 0.5: 检查是否是闲聊/非任务对话
-    if (this.isCasualConversation(ctx.userMessage)) {
+    // Step 0.5: 用 LLM 判断是否是问候/闲聊，如果是则由 Oliver 直接回应
+    if (await this.isCasualConversation(ctx.userMessage)) {
       return await this.answerCasual(ctx.userMessage, onToken)
     }
 
@@ -712,23 +712,149 @@ ${allFindings}
     return selfIntro
   }
 
-  private isCasualConversation(userMessage: string): boolean {
+  private async isCasualConversation(userMessage: string): Promise<boolean> {
+    const msg = userMessage.trim()
+    if (!msg) return false
+
+    // 快速路径：明确的问候/闲聊关键词，避免不必要的 LLM 调用
+    const quickGreeting = /^(你好|你好啊|您好|您好啊|hi\b|hello\b|hey\b|早上好|上午好|下午好|晚上好|在吗|在不在|嗨|哈喽|早啊|晚安)/i
+    const quickCasual = /^(没什么|好吧|算了|没事|谢谢|感谢|哈哈|嘿|嗯|不错|好的$|行$|可以$|就这样|随便|ok$|yes$|no$|nah)/i
+    // 寒/关心类：今天怎么样、最近好吗、吃了吗、感觉如何 等
+    const quickSmallTalk = /(今天.*怎么样|最近.*怎么样|最近.*好吗|感觉.*怎么样|吃.*了吗|过得.*怎么样|心情.*怎么样|身体.*怎么样|工作.*怎么样|生活.*怎么样)/i
+    // 口语化思考/疑惑/困惑/随意表达（无明确任务意图）
+    const quickConversational = /^(我想想|让我想想|我想一下|等一下|稍等|什么意思|是什么意思|啥意思|搞不懂|不明白|不知道|为啥|为什么$|真的吗|是吗|这样啊|原来如此|懂了|明白了$|了解了$|知道了$|我想|让我|让我想想再说|先不急|先不|不急|等等|稍等一下|我想想再说)/i
+    // 纯标点/极短无意义消息
+    const quickNoise = /^[\?\？\!\！\.\。\,\，\~\～\…]+$/i
+    // 极短消息（1-3个字符且不含任务关键词）
+    const quickTooShort = /^.{1,3}$/i
+    if (quickGreeting.test(msg) || quickCasual.test(msg) || quickSmallTalk.test(msg) ||
+        quickConversational.test(msg) || quickNoise.test(msg) || quickTooShort.test(msg)) {
+      return true
+    }
+
+    // 快速路径：明确的任务关键词，直接排除
+    const taskKeywords = /填写|分析|审查|总结|整理|记住|回忆|忘了|代码|文档|文件|项目|bug|优化|分类|归档|表单|表格|附件|申报书|帮我|完成|提取|填表|信息采集|待填|填入|技术栈|概览|结构|移动|重组|记忆|统计|忘了|删除|搜索|查找|读取|写入|创建|修改|删除|运行|执行|部署|测试|调试|安装|配置|搭建|搭建|重构|性能|安全|漏洞|架构|设计|实现|开发|编写|生成|导出|导入|转换|对比|合并|拆分|备份|恢复|迁移|升级|降级|监控|日志|报告|评估|建议|方案|计划|进度|状态|问题|解决|修复|改进|增强|扩展|集成|对接|联调|上线|发布|回滚|回退|版本|分支|合并|冲突|依赖|环境|配置|参数|变量|常量|函数|方法|类|接口|模块|组件|页面|路由|状态|数据|接口|API|数据库|缓存|队列|消息|通知|推送|拉取|同步|异步|并发|线程|进程|内存|CPU|磁盘|网络|带宽|延迟|吞吐|QPS|TPS|RT|SLA|SLO|SLI|指标|度量|监控|告警|巡检|压测|基准|性能|安全|漏洞|渗透|扫描|审计|合规|隐私|加密|解密|签名|认证|授权|权限|角色|用户|账户|密码|令牌|证书|密钥|会话|Cookie|Session|Token|OAuth|JWT|SSO|LDAP|SAML|2FA|MFA/i
+    if (taskKeywords.test(msg)) return false
+
+    // 用 LLM 判断是否是问候/闲聊/寒暄
+    try {
+      const settingsStore = useSettingsStore.getState()
+      const userConfig = settingsStore.getAgentModel(this.config.id)
+      const provider = userConfig?.provider || this.config.provider
+      const model = userConfig?.model || this.config.model || ''
+
+      const result = await callLLM({
+        provider,
+        model,
+        messages: [
+          { role: 'system' as const, content: `你是一个意图分类器。判断用户消息是否属于以下类别：
+- 问候/打招呼（如"你好"、"在吗"、"早上好"）
+- 寒暄/闲聊（如"今天怎么样"、"最近好吗"、"吃了吗"）
+- 感叹/评价（如"不错"、"哈哈"）
+- 无明确任务的随意对话
+
+如果属于以上任何一类，回复 yes。
+如果用户提出了具体的工作任务（如分析文件、写代码、填表格、查资料、整理文档等），回复 no。
+
+只回复 yes 或 no，不要解释。` },
+          { role: 'user' as const, content: `用户消息：${msg}` },
+        ],
+      })
+
+      console.log('[Leader] isCasualConversation LLM result for:', msg, '→', result.trim())
+      return result.trim().toLowerCase().startsWith('yes')
+    } catch {
+      console.log('[Leader] isCasualConversation LLM error for:', msg)
+      return false
+    }
+  }
+
+  private isGreeting(userMessage: string): boolean {
     const msg = userMessage.trim().toLowerCase()
-    // 检查是否是闲聊/感叹/评价性质的话，而不是具体任务
-    const casualPatterns = [
-      /^没什么/, /^好像没什么/, /^没有什么/,
-      /^好吧/, /^算了/, /^没事/,
-      /^谢谢/, /^感谢/,
-      /^哈哈/, /^嘿/, /^嗯/,
-      /^不错/, /^好的$/, /^行$/, /^可以$/,
-      /^就这样/, /^随便/,
-      /没有什么.*指令/, /没什么.*任务/, /没什么.*做/,
-      /就这样吧/, /算了.*吧/,
+    const greetingPatterns = [
+      /^你好/, /^你好啊/, /^您好/, /^您好啊/,
+      /^hi\b/, /^hello\b/, /^hey\b/,
+      /^早上好/, /^上午好/, /^下午好/, /^晚上好/,
+      /^在吗/, /^在不在/,
+      /^嗨/, /^哈喽/,
     ]
-    return casualPatterns.some(p => p.test(msg))
+    return greetingPatterns.some(p => p.test(msg))
   }
 
   private async answerCasual(userMessage: string, onToken?: (token: string) => void): Promise<string> {
+    const msg = userMessage.trim()
+
+    // 问候语：Oliver 直接回应，自然地问能帮什么
+    if (this.isGreeting(userMessage)) {
+      const greetingReplies = [
+        '你好！有什么我可以帮你的吗？我可以帮你分析项目、审查代码、总结文档、整理文件，或者填写表单，直接告诉我就行。',
+        '你好呀！今天想做什么？分析文件、审查代码、总结文档、整理文件、填写表单，我都能安排。',
+        '嗨！有什么需要我帮忙的吗？直接说你的需求，我来安排合适的 Agent 处理。',
+      ]
+      const reply = randomPick(greetingReplies)
+      if (onToken) {
+        for (const char of reply) {
+          onToken(char)
+          await new Promise((r) => setTimeout(r, 30))
+        }
+      }
+      return reply
+    }
+
+    // 疑惑/困惑类（"什么意思啊"、"搞不懂"、"不明白"）
+    const confusionPatterns = /什么意思|是什么意思|啥意思|搞不懂|不明白|不知道|为啥|为什么$/i
+    if (confusionPatterns.test(msg)) {
+      const confusionReplies = [
+        '抱歉让你困惑了！我是 Oliver，团队的调度助手。你可以用自然语言告诉我你想做什么，比如"分析这个项目"、"审查代码"、"填写表格"，我会安排合适的 Agent 来处理。',
+        '不好意思！简单来说，我可以帮你：分析文件结构、审查代码质量、总结文档内容、整理文件分类、填写表单文档。你想做哪个？直接说就行。',
+      ]
+      const reply = randomPick(confusionReplies)
+      if (onToken) {
+        for (const char of reply) {
+          onToken(char)
+          await new Promise((r) => setTimeout(r, 30))
+        }
+      }
+      return reply
+    }
+
+    // 思考/犹豫类（"我想想"、"让我想想"、"等一下"）
+    const thinkingPatterns = /我想想|让我想想|我想一下|等一下|稍等|先不急|让我想想再说|我想想再说/i
+    if (thinkingPatterns.test(msg)) {
+      const thinkingReplies = [
+        '好的，慢慢想～有需要随时叫我。',
+        '没问题，想好了直接告诉我就行。',
+        '好的，我随时在这里。',
+      ]
+      const reply = randomPick(thinkingReplies)
+      if (onToken) {
+        for (const char of reply) {
+          onToken(char)
+          await new Promise((r) => setTimeout(r, 30))
+        }
+      }
+      return reply
+    }
+
+    // 纯标点/问号类（"？？？"、"！！！"）
+    const purePunctuation = /^[\?\？\!\！\.\。\,\，\~\～\…]+$/i
+    if (purePunctuation.test(msg)) {
+      const punctuationReplies = [
+        '怎么了？有什么我可以帮你的吗？',
+        '我在呢，有什么需要帮忙的直接说就行。',
+        '别急，慢慢说，我听着呢。',
+      ]
+      const reply = randomPick(punctuationReplies)
+      if (onToken) {
+        for (const char of reply) {
+          onToken(char)
+          await new Promise((r) => setTimeout(r, 30))
+        }
+      }
+      return reply
+    }
+
+    // 其他闲聊
     const responses = [
       '好的，有需要随时叫我！',
       '没问题，随时待命！',

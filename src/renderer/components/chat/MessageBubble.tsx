@@ -98,7 +98,16 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
                   </div>
                 )}
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>
-                {message.content === '' && !message.analysisProgress && <span className="inline-block w-2 h-4 bg-brutal-black animate-pulse ml-0.5 align-middle" />}
+                {message.content === '' && !message.analysisProgress && (
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex gap-1">
+                      <span className="inline-block w-2 h-2 bg-brutal-black rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="inline-block w-2 h-2 bg-brutal-black rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="inline-block w-2 h-2 bg-brutal-black rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                    <span className="text-xs font-bold text-black/70 tracking-wide">正在思考中</span>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-sm leading-relaxed whitespace-pre-wrap">{String(message.content)}</div>

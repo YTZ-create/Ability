@@ -253,6 +253,7 @@ export const ChatInput: React.FC = () => {
         if (allDocFiles.length === 0) {
           addMessage({ role: 'system', content: '未找到可填写的文档文件（支持 .md, .txt, .html, .docx, .pdf 等格式）' })
           setIsFormFillingSession(false)
+          useChatStore.getState().setActiveAgent(null)
           setIsStreaming(false)
           useChatStore.getState().setAbortController(null)
           return
@@ -307,6 +308,7 @@ export const ChatInput: React.FC = () => {
             console.error('[FormFiller Direct] extractFieldsFromDoc failed:', err)
             updateLastMessage(`❌ 分析失败: ${err.message}\n\n文件: ${targetFile.name}\n路径: ${targetFile.path}\n\n请检查文件是否为有效的文档格式（.docx, .pdf, .txt 等）。`)
             setIsFormFillingSession(false)
+            useChatStore.getState().setActiveAgent(null)
           } finally {
             useChatStore.getState().setAbortController(null)
             setIsStreaming(false)
@@ -423,6 +425,7 @@ export const ChatInput: React.FC = () => {
                       updateLastMessage('未找到可填写的文档文件（支持 .md, .txt, .html, .docx, .pdf 等格式）')
                     }
                     setIsFormFillingSession(false)
+                    useChatStore.getState().setActiveAgent(null)
                     setIsStreaming(false)
                     useChatStore.getState().setAbortController(null)
                     return
@@ -479,6 +482,7 @@ export const ChatInput: React.FC = () => {
                         updateLastMessage(`❌ 分析失败: ${err.message}\n\n文件: ${targetFile.name}\n路径: ${targetFile.path}\n\n请检查文件是否为有效的文档格式（.docx, .pdf, .txt 等）。`)
                       }
                       setIsFormFillingSession(false)
+                      useChatStore.getState().setActiveAgent(null)
                     } finally {
                       useChatStore.getState().setAbortController(null)
                       setIsStreaming(false)
@@ -516,6 +520,12 @@ export const ChatInput: React.FC = () => {
                   }
                 )
                 if (controller.signal.aborted) return
+                // 修复：如果子 Agent 没有调用 onToken（如 MemoryAgent 直接 return），气泡内容为空，需要把返回结果写入
+                const stateAfterExec = useChatStore.getState()
+                const lastMsgAfterExec = stateAfterExec.messages[stateAfterExec.messages.length - 1]
+                if (lastMsgAfterExec && lastMsgAfterExec.role === 'agent' && !lastMsgAfterExec.content && subResult) {
+                  updateLastMessage(subResult)
+                }
                 // 子 Agent 完成通知（随机回复）
                 useChatStore.getState().addAgentConversation({
                   agentName: dispatch.agentName,
@@ -539,7 +549,7 @@ export const ChatInput: React.FC = () => {
                     })
                     // 创建被手交 Agent 的消息气泡
                     addMessage({ role: 'agent', content: '', agentName: nextConfig.name, agentColor: nextConfig.color })
-                    await nextAgent.execute(
+                    const handoffResult = await nextAgent.execute(
                       { folder: activeFolder, userMessage: text, history, signal: controller.signal, knowledgeContext, codebaseContext },
                       (token: string) => {
                         if (controller.signal.aborted) return
@@ -551,6 +561,12 @@ export const ChatInput: React.FC = () => {
                       }
                     )
                     if (!controller.signal.aborted) {
+                      // 修复：如果手交 Agent 没有调用 onToken，气泡内容为空，需要把返回结果写入
+                      const stateAfterHandoff = useChatStore.getState()
+                      const lastMsgAfterHandoff = stateAfterHandoff.messages[stateAfterHandoff.messages.length - 1]
+                      if (lastMsgAfterHandoff && lastMsgAfterHandoff.role === 'agent' && !lastMsgAfterHandoff.content && handoffResult) {
+                        updateLastMessage(handoffResult)
+                      }
                       useChatStore.getState().addAgentConversation({
                         agentName: nextConfig.name,
                         agentColor: nextConfig.color,
