@@ -4,15 +4,20 @@ import remarkGfm from 'remark-gfm'
 import { useChatStore, type AgentConversationMessage } from '../../stores/chatStore'
 import { formatChatTime } from '../../utils/formatters'
 import { cleanHandoffContent } from '../../utils/handoff'
-import { Sparkles, FolderSearch, Code2, FileText, FolderCog, FileOutput } from 'lucide-react'
+import { Sparkles, FolderSearch, FileText, FileOutput, GitBranch, Search, Bug, Sun, PenTool, Globe } from 'lucide-react'
 
 const AGENT_ICONS: Record<string, React.ComponentType<{ size?: number | string; color?: string }>> = {
   'Oliver': Sparkles,
   'Charlotte': FolderSearch,
-  'William': Code2,
   'Amelia': FileText,
-  'James': FolderCog,
   'Ethan': FileOutput,
+  'Atlas': GitBranch,
+  'Audrey': Search,
+  'Avery': Bug,
+  'Aurora': Sun,
+  'Aria': PenTool,
+  'Arthur': FileText,
+  'Alice': Globe,
 }
 
 const AgentBubble: React.FC<{ message: AgentConversationMessage }> = ({ message }) => {

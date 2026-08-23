@@ -3,7 +3,7 @@
  * 所有原生功能（文件系统/存储/窗口）的统一入口
  */
 
-import type { PlatformAPI, PlatformFS, PlatformStorage, PlatformWindow, PlatformOS, FileEntry } from './platformAPI'
+import type { PlatformAPI, PlatformFS, PlatformStorage, PlatformWindow, PlatformOS, FileEntry, WatchEvent } from './platformAPI'
 
 declare global {
   interface Window {
@@ -358,18 +358,18 @@ const storage: PlatformStorage = {
 // ---- 窗口 ----
 const windowApi: PlatformWindow = {
   minimize: () => {
-    if (!window.Neutralino) return
+    if (!window.Neutralino) { console.warn('[AI Agent] minimize: Neutralino not loaded'); return }
     window.Neutralino.window.minimize().catch((e: any) => console.error('[AI Agent] minimize failed:', e))
   },
   maximize: async () => {
-    if (!window.Neutralino) return
+    if (!window.Neutralino) { console.warn('[AI Agent] maximize: Neutralino not loaded'); return }
     try {
       const m = await window.Neutralino.window.isMaximized()
       if (m) { await window.Neutralino.window.unmaximize() } else { await window.Neutralino.window.maximize() }
     } catch (e) { console.error('[AI Agent] maximize failed:', e) }
   },
   close: () => {
-    if (!window.Neutralino) return
+    if (!window.Neutralino) { console.warn('[AI Agent] close: Neutralino not loaded'); return }
     window.Neutralino.app.exit().catch((e: any) => console.error('[AI Agent] exit failed:', e))
   },
   isMaximized: () => window.Neutralino ? window.Neutralino.window.isMaximized() : Promise.resolve(false),
@@ -379,7 +379,82 @@ const windowApi: PlatformWindow = {
   },
 }
 
-const fsApi: PlatformFS = { scanDirectory, readFile, readBinaryFile, writeFile, writeBinaryFile, searchInDirectory, createDirectory, moveFile, moveDirectory }
+// ---- diff：行级 LCS 统一文本（+ / - / 空格 前缀）----
+function _lcsLines(oldLines: string[], newLines: string[]): string[] {
+  const n = oldLines.length
+  const m = newLines.length
+  // 内存优化：n*m 可能很大，这里限制阈值
+  if (n * m > 1_000_000) {
+    // 退化为简单逐行对比（O(n)）
+    const out: string[] = []
+    let i = 0, j = 0
+    while (i < n && j < m) {
+      if (oldLines[i] === newLines[j]) { out.push(' ' + oldLines[i]); i++; j++ }
+      else { out.push('-' + oldLines[i]); i++ }
+    }
+    while (i < n) { out.push('-' + oldLines[i]); i++ }
+    while (j < m) { out.push('+' + newLines[j]); j++ }
+    return out
+  }
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const out: string[] = []
+  let i = 0, j = 0
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) { out.push(' ' + oldLines[i]); i++; j++ }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push('-' + oldLines[i]); i++ }
+    else { out.push('+' + newLines[j]); j++ }
+  }
+  while (i < n) { out.push('-' + oldLines[i]); i++ }
+  while (j < m) { out.push('+' + newLines[j]); j++ }
+  return out
+}
+
+function diff(oldText: string, newText: string): string {
+  const oldLines = (oldText || '').replace(/\r\n/g, '\n').split('\n')
+  const newLines = (newText || '').replace(/\r\n/g, '\n').split('\n')
+  return _lcsLines(oldLines, newLines).join('\n')
+}
+
+// ---- fileWatch：轮询 mtime，返回取消订阅 ----
+function fileWatch(path: string, callback: (evt: WatchEvent) => void): () => void {
+  let lastMtime = 0
+  let lastExists = false
+  let timer: ReturnType<typeof setInterval> | null = null
+  try {
+    if (window.Neutralino) {
+      window.Neutralino.filesystem.getStats(path).then((s: NLStats) => {
+        lastMtime = s.modifiedAt
+        lastExists = true
+      }).catch(() => { lastExists = false })
+    }
+  } catch { /* ignore */ }
+  timer = setInterval(() => {
+    if (!window.Neutralino) return
+    window.Neutralino.filesystem.getStats(path).then((s: NLStats) => {
+      if (lastExists && s.modifiedAt !== lastMtime) {
+        lastMtime = s.modifiedAt
+        callback('changed')
+      } else if (!lastExists) {
+        lastExists = true
+        lastMtime = s.modifiedAt
+        callback('created')
+      }
+    }).catch(() => {
+      if (lastExists) {
+        lastExists = false
+        callback('deleted')
+      }
+    })
+  }, 500)
+  return () => { if (timer) clearInterval(timer) }
+}
+
+const fsApi: PlatformFS = { scanDirectory, readFile, readBinaryFile, writeFile, writeBinaryFile, searchInDirectory, createDirectory, moveFile, moveDirectory, diff, fileWatch }
 
 // ---- OS 命令 ----
 const osApi: PlatformOS = {
@@ -394,6 +469,14 @@ const osApi: PlatformOS = {
       }
     } catch (err: any) {
       return { stdout: '', stderr: err.message || 'Unknown error', exitCode: -1 }
+    }
+  },
+  notify(title: string, body: string) {
+    if (!window.Neutralino) return
+    try {
+      window.Neutralino.os.showNotification(title, body)
+    } catch (err: any) {
+      console.warn('[AI Agent] notify failed:', err?.message)
     }
   },
 }
@@ -429,6 +512,20 @@ export const api = {
 let _neutralinoReady = false
 export function isNeutralinoReady(): boolean { return _neutralinoReady }
 
+/** 等待 Neutralino WebSocket 连接就绪（最多等 5 秒） */
+function waitForNeutralinoReady(timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve) => {
+    if (_neutralinoReady) return resolve()
+    const start = Date.now()
+    const timer = setInterval(() => {
+      if (_neutralinoReady || Date.now() - start > timeoutMs) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 100)
+  })
+}
+
 export async function initNeutralino(): Promise<void> {
   if (typeof window.Neutralino === 'undefined') {
     console.warn('[AI Agent] Neutralino not available, running in browser mode')
@@ -437,15 +534,21 @@ export async function initNeutralino(): Promise<void> {
   console.log('[AI Agent] Neutralino object found, NL_PORT:', (window as any).NL_PORT, 'NL_TOKEN exists:', !!(window as any).NL_TOKEN)
   try {
     await window.Neutralino.init()
+    // 等待 WebSocket 连接建立（init() 不等待连接）
+    await new Promise<void>((resolve) => {
+      const start = Date.now()
+      const timer = setInterval(() => {
+        // Neutralino 内部 WebSocket readyState 无法直接访问，用 isMaximized 探测
+        window.Neutralino.window.isMaximized().then(() => {
+          clearInterval(timer)
+          resolve()
+        }).catch(() => {
+          if (Date.now() - start > 5000) { clearInterval(timer); resolve() }
+        })
+      }, 200)
+    })
     _neutralinoReady = true
-    console.log('[AI Agent] Neutralino initialized, ready:', _neutralinoReady)
-    // 测试 window API 是否可用
-    try {
-      const maximized = await window.Neutralino.window.isMaximized()
-      console.log('[AI Agent] window.isMaximized() test passed, result:', maximized)
-    } catch (e: any) {
-      console.error('[AI Agent] window.isMaximized() test FAILED:', e)
-    }
+    console.log('[AI Agent] Neutralino initialized & connected, ready:', _neutralinoReady)
   } catch (e: any) {
     console.warn('[AI Agent] Neutralino init error:', e)
   }

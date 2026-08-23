@@ -16,12 +16,15 @@ export const StatusBar: React.FC = () => {
     <div className="h-7 border-t-2 border-brutal-black bg-brutal-black text-brutal-cream flex items-center justify-between px-3 text-[10px] font-mono flex-shrink-0">
       <div className="flex items-center gap-3">
         {isStreaming ? (
-          <span className="flex items-center gap-1.5 text-brutal-yellow">
+          <span className="flex items-center gap-1.5 text-brutal-yellow font-bold">
             <span className="w-1.5 h-1.5 rounded-sm bg-brutal-yellow animate-pulse" />
             Agent 思考中...
           </span>
         ) : (
-          <span className="text-white/80">就绪</span>
+          <span className="flex items-center gap-1.5 text-white/80">
+            <span className="w-1.5 h-1.5 rounded-sm bg-brutal-lime" />
+            就绪
+          </span>
         )}
         {activeFolder && (
           <>

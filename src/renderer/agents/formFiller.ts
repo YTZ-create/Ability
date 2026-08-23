@@ -74,9 +74,14 @@ export class FormFillerAgent extends BaseAgent {
 - **Oliver** - 智能调度助手（团队领导）
 - **Ethan** (你) - 信息采集与文档填写专家
 - **Charlotte** - 文件分析专家
-- **William** - 代码审查专家
 - **Amelia** - 文档摘要专家
-- **James** - 文件整理专家
+- **Atlas** - 系统架构设计专家
+- **Audrey** - 深度研究专家
+- **Avery** - 测试修复与代码审查专家
+- **Aurora** - 日常事务专家
+- **Aria** - 内容生成专家
+- **Arthur** - 文档与演示全能专家
+- **Alice** - 浏览器控制专家
 
 ## 重要规则
 - 你是信息采集与文档填写专家，专注于从文档中提取需要填写的字段，然后收集信息并填入。
@@ -320,14 +325,49 @@ ${locationsDescription}
 
   /**
    * 构建 Word 文档结构描述（供 LLM 参考）
+   * 修复4：使用 summary 字段提供文档全貌
    */
   private buildDocxStructureDescription(structure: any): string {
     const parts: string[] = []
 
+    // 修复4：添加文档摘要
+    if (structure.summary) {
+      const summary = structure.summary
+      const summaryParts = [
+        `### 文档摘要`,
+        `- 段落数: ${summary.totalParagraphs}`,
+        `- 表格数: ${summary.totalTables}`,
+        `- 占位符数: ${summary.totalPlaceholders}`,
+        `- 可填写单元格: ${summary.fillableCellCount}`,
+        `- 标签单元格: ${summary.labelCellCount}`,
+        `- 是否有合并单元格: ${summary.hasMergedCells ? '是' : '否'}`,
+      ]
+      if (summary.tableDimensions.length > 0) {
+        summaryParts.push(`- 表格尺寸: ${summary.tableDimensions.join(', ')}`)
+      }
+      if (summary.coverFields.length > 0) {
+        summaryParts.push(`- 封面填空: ${summary.coverFields.join('、')}`)
+      }
+      parts.push(summaryParts.join('\n'))
+    }
+
     if (structure.tables?.length > 0) {
       const tableDesc = structure.tables
-        .filter((t: any) => t.isEmpty || t.hasPlaceholder || t.hasLabel)
-        .map((t: any) => `  - 单元格 ${t.cellRef}: "${t.text.substring(0, 50)}" ${t.isEmpty ? '[空白]' : ''} ${t.hasPlaceholder ? '[占位符]' : ''} ${t.hasLabel ? '[标签]' : ''}`)
+        .filter((t: any) => {
+          // 跳过 vMerge continue 行（影子 cell）
+          if (t.vMergeType === 'continue') return false
+          return t.isEmpty || t.hasPlaceholder || t.hasLabel
+        })
+        .map((t: any) => {
+          let desc = `  - 单元格 ${t.cellRef}: "${t.text.substring(0, 50)}"`
+          if (t.isEmpty) desc += ' [空白]'
+          if (t.hasPlaceholder) desc += ' [占位符]'
+          if (t.hasLabel) desc += ' [标签]'
+          // 修复3：显示关联信息
+          if (t.labelFor) desc += ` → 填写格: ${t.labelFor}`
+          if (t.filledBy) desc += ` ← 标签: ${t.filledBy}`
+          return desc
+        })
         .join('\n')
       if (tableDesc) parts.push(`### 表格单元格\n${tableDesc}`)
     }

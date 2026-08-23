@@ -27,19 +27,21 @@ export const TitleBar: React.FC = () => {
   }, [])
 
   const handleMinimize = () => {
-    api.window.minimize()
+    console.log('[TitleBar] minimize clicked, Neutralino:', typeof window.Neutralino, 'NL_PORT:', (window as any).NL_PORT, 'NL_TOKEN:', !!(window as any).NL_TOKEN)
+    try { api.window.minimize() } catch (e) { console.error('[TitleBar] minimize error:', e) }
   }
   const handleMaximize = async () => {
-    await api.window.maximize()
-    setIsMaximized(!isMaximized)
+    console.log('[TitleBar] maximize clicked, Neutralino:', typeof window.Neutralino)
+    try { await api.window.maximize(); setIsMaximized(!isMaximized) } catch (e) { console.error('[TitleBar] maximize error:', e) }
   }
   const handleClose = () => {
-    api.window.close()
+    console.log('[TitleBar] close clicked, Neutralino:', typeof window.Neutralino)
+    try { api.window.close() } catch (e) { console.error('[TitleBar] close error:', e) }
   }
 
   return (
     <div className="h-10 bg-brutal-black text-brutal-cream flex items-center justify-between select-none flex-shrink-0">
-      <div ref={dragRef} className="flex items-center gap-2 pl-4 flex-1 h-full" />
+      <div ref={dragRef} className="flex-1 h-full" />
       <div className="flex items-center h-full">
         <button onClick={handleMinimize} className="h-full px-3 hover:bg-white/20">
           <Minus size={14} />

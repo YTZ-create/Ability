@@ -1,0 +1,91 @@
+# 代码审查规则模板（PENDING_UPDATE H 表）
+# 供 Avery 行级审查使用。按「语言 / 路径 / 变更类型」匹配规则。
+# 优先级从高到低；先按路径/变更类型精确匹配，再回退到语言，最后用通用规则。
+
+general:
+  priority: 100
+  rules:
+    - id: g-01
+      name: 未捕获异常
+      severity: warning
+      patterns: ["try {", "catch", "throw new"]
+      message: "检查异常处理：确保 catch 不吞掉错误，并给出有意义的错误信息。"
+    - id: g-02
+      name: 魔法数字
+      severity: info
+      patterns: ["= [2-9]"]
+      message: "建议将重复出现的裸数字提取为具名常量。"
+    - id: g-03
+      name: 死代码
+      severity: info
+      message: "检查是否存在未被引用的变量/函数或多余注释，及时清理。"
+
+by_language:
+  typescript:
+    - id: ts-01
+      name: 类型安全
+      severity: warning
+      message: "避免使用 any；如必要请用 unknown 并做窄化。确保 TS 严格模式通过。"
+    - id: ts-02
+      name: 可选链与空值
+      severity: warning
+      patterns: ["&& a.b", "foo.bar &&"]
+      message: "建议使用可选链 (?. ) 与空值合并 (??) 简化判空逻辑。"
+    - id: ts-03
+      name: 导入清理
+      severity: info
+      message: "移除未使用的 import，避免循环依赖。"
+
+  javascript:
+    - id: js-01
+      name: ES 规范
+      severity: info
+      message: "统一使用 const/let，避免 var。"
+    - id: js-02
+      name: 严格模式
+      severity: warning
+      message: "建议在模块入口开启 'use strict'。"
+
+by_path:
+  - match: ["core/", "src/core/", "*Store.ts", "stores/"]
+    rules:
+      - id: p-01
+        name: 状态一致性
+        severity: warning
+        message: "Store 更新需用不可变更新，避免直接改引用；保证 zustand 状态可预测。"
+  - match: ["api/", "services/", "protocol", "ipc"]
+    rules:
+      - id: p-02
+        name: 边界校验
+        severity: warning
+        message: "平台/服务边界须做输入校验与错误兜底，返回值类型完整。"
+  - match: ["security", "auth", "auth.*", "token"]
+    rules:
+      - id: p-03
+        name: 安全审查
+        severity: error
+        message: "不得硬编码密钥；鉴权相关代码需审查越权与注入风险。"
+
+by_change_type:
+  - change_type: "style"
+    rules:
+      - id: c-01
+        name: 格式统一
+        severity: info
+        message: "保持与项目 prettier/eslint 配置一致。"
+  - change_type: "bugfix"
+    rules:
+      - id: c-02
+        name: 回归风险
+        severity: warning
+        message: "修复后需补充/更新对应单测，确认无副作用。"
+  - change_type: "refactor"
+    rules:
+      - id: c-03
+        name: 行为不变
+        severity: warning
+        message: "重构不得改变对外行为，需增量验证。"
+
+# 输出格式：每条审查结果包含 line、severity、ruleId、message
+output_format: |
+  [{line}, {severity}, {ruleId}] {message}

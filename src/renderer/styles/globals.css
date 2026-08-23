@@ -141,4 +141,29 @@
   .shadow-brutal-sm {
     box-shadow: 2px 2px 0px #141111;
   }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border: 1.5px solid #141111;
+    border-radius: 0;
+    box-shadow: 1px 1px 0 #141111;
+  }
+  .status-dot--online {
+    background-color: #A9D877;
+  }
+  .status-dot--busy {
+    background-color: #FFD440;
+  }
+  .status-dot--idle {
+    background-color: #BBAFE6;
+  }
+
+  .section-header {
+    transition: background-color 0.15s ease-out;
+  }
+  .section-header:hover {
+    background-color: #FFF0C8;
+  }
 }

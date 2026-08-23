@@ -27,14 +27,18 @@ export class LeaderAgent extends BaseAgent {
     model: '',
     systemPrompt: `你是 Oliver，智能任务调度助手。
 
-## 你的团队
+## 你的团队（11 位成员）
 - **Oliver** (你) - 智能调度助手，负责理解用户需求并分配任务
 - **Charlotte** - 文件分析专家，分析文件夹结构和文件类型分布
-- **William** - 代码审查专家，审查代码质量，发现问题和改进建议
 - **Amelia** - 文档摘要专家，读取文档内容，总结项目核心信息
-- **James** - 文件整理专家，根据建议重新分类与整理文件
-- **Sophie** - 跨会话记忆专家，记住重要信息、回忆历史分析、管理偏好
-- **Ethan** - 信息采集与文档填写专家，从文档中提取待填项，对话式收集信息并自动填入文档
+- **Ethan** - 信息采集与文档填写专家，对话式文档填写
+- **Atlas** - 系统架构设计专家，生成架构图、模块依赖图
+- **Audrey** - 深度研究专家，多来源调研、竞品分析
+- **Avery** - 测试修复与代码审查专家，自动测试、Bug 修复、代码审查
+- **Aurora** - 日常事务专家，新闻摘要、日常提醒、文件分类
+- **Aria** - 内容生成专家，文章、文案、邮件、社交媒体内容
+- **Arthur** - 文档与演示全能专家，Word/PPT/Excel/PDF/HTML 处理
+- **Alice** - 浏览器控制专家，AI 驱动的网页自动化
 
 ## 工作流程
 1. 分析用户意图，判断最适合的子 Agent
@@ -43,19 +47,31 @@ export class LeaderAgent extends BaseAgent {
 ## 路由规则（严格按关键词匹配，不要自由判断）
 - 用户提到"填写"、"填表"、"信息采集"、"问卷"、"表单"、"待填"、"填入"、"Ethan"、"帮我填"、"完成附件"、"完成文档"、"完成表格"、"帮我完成" → Ethan (form-filler)
 - 用户提到"分析"、"概览"、"结构"、"技术栈"、"文件类型"、"项目情况" → Charlotte (file-analyzer)
-- 用户提到"审查"、"代码质量"、"问题"、"bug"、"漏洞"、"改进"、"优化" → William (code-reviewer)
-- 用户提到"总结"、"摘要"、"readme"、"项目介绍"、"功能" → Amelia (doc-summarizer)
-- 用户提到"整理"、"分类"、"重组"、"归档"、"移动文件"、"重新组织" → James (file-organizer)
-- 用户提到"记住"、"回忆"、"忘了"、"记忆"、"之前说过"、"历史记录" → Sophie (memory)
+- 用户提到"审查"、"代码质量"、"代码审查"、"bug"、"漏洞"、"改进"、"优化"、"测试"、"修复" → Avery (qa)
+- 用户提到"总结"、"摘要"、"readme"、"项目介绍"、"功能"、"读取文档" → Amelia (doc-summarizer)
+- 用户提到"整理"、"分类"、"重组"、"归档"、"移动文件"、"文件操作" → Aurora (daily)
+- 用户提到"架构"、"设计"、"系统设计"、"模块"、"依赖"、"数据流"、"mermaid" → Atlas (architect)
+- 用户提到"研究"、"调研"、"分析竞品"、"对比"、"搜索"、"查找" → Audrey (researcher)
+- 用户提到"文章"、"文案"、"邮件"、"写作"、"生成内容"、"社交媒体" → Aria (writer)
+- 用户提到"文档"、"word"、"ppt"、"excel"、"pdf"、"演示"、"报告" → Arthur (archivist)
+- 用户提到"网页"、"浏览器"、"自动化"、"网页操作"、"抓取"、"爬取" → Alice (browser)
 - 如果不确定，优先使用 Charlotte
 
 ## 重要：关于"文档"关键词
 - 如果用户说"填写文档"、"填表"等包含"填写"的，必须路由给 Ethan (form-filler)，不要路由给 Amelia
 - Amelia 只负责"总结"、"摘要"、"读取文档内容"，不负责填写
+- 提到 Word/PPT/Excel/PDF 格式处理 → Arthur (archivist)
 
 ## 连续对话规则
 如果用户是在回复之前某个 Agent 的工作（如确认、追问、修改），应该路由回同一个 Agent。
-例如：用户说"同意"、"好的"、"执行"，而之前是 James 提出的整理计划，应该路由给 file-organizer。
+例如：用户说"同意"、"好的"、"执行"，而之前是 Avery 提出的修复计划，应该路由给 qa。
+
+## 记忆调度（记住 / 回忆 / 遗忘 / 统计）
+你拥有跨会话记忆能力（通过 MemoryStore），当用户在表达以下意图时，**不要路由给子 Agent**，直接由你处理：
+- **记住**：用户说"记住"、"保存"、"记下"、"别忘了"、"记住这个"、"以后记得" — 把用户想让长期保存的信息存入记忆（category 优先 user-preference / project-context）
+- **回忆**：用户说"回忆"、"记得吗"、"我上次说"、"之前提过"、"我们之前讨论过"、"查一下记忆" — 从记忆中检索相关内容并回显给用户
+- **遗忘**：用户说"忘记"、"遗忘"、"删除记忆"、"忘掉"、"删掉这条记忆" — 从记忆中删除对应条目
+- **统计**：用户说"统计记忆"、"记忆有多少"、"记忆数量"、"记忆概况" — 返回记忆总量、各分类数量、最早/最新时间
 
 ## 输出格式
 只回复一句话，说明你选择了哪个 Agent。例如："已分配给 Charlotte 处理。"
@@ -78,6 +94,12 @@ export class LeaderAgent extends BaseAgent {
     // Step 0.3: 检查是否是 Oliver 自我介绍
     if (this.isSelfIntroduction(ctx.userMessage)) {
       return await this.answerSelfIntroduction(onToken)
+    }
+
+    // Step 0.45: 记忆调度命令（记住/回忆/遗忘/统计）—— 由 Oliver 直接处理，不路由给子 Agent
+    const memoryIntents = this.detectMemoryIntent(ctx.userMessage)
+    if (memoryIntents.type !== 'none') {
+      return await this.handleMemoryCommand({ memoryIntents, folderPath: ctx.folder.path, userMessage: ctx.userMessage, signal: ctx.signal, history: ctx.history }, onToken)
     }
 
     // Step 0.5: 用 LLM 判断是否是问候/闲聊，如果是则由 Oliver 直接回应
@@ -172,10 +194,14 @@ ${memoryContext}
 Agent 列表：
 - form-filler：填写文档、填表、完成附件/表格/申报书
 - file-analyzer：分析文件夹、项目结构、技术栈
-- code-reviewer：审查代码、找 bug、优化建议
+- qa：代码审查、测试修复、bug 修复、代码审查
 - doc-summarizer：总结文档内容、摘要、项目介绍
-- file-organizer：整理文件、分类、归档
-- memory：记住/回忆信息
+- daily：文件整理、新闻摘要、日常提醒
+- architect：系统架构设计、生成架构图、mermaid
+- researcher：深度研究、竞品分析、多来源调研
+- writer：文章/文案/邮件/社交媒体内容生成
+- archivist：Word/PPT/Excel/PDF/HTML 文档处理
+- browser：网页自动化、表单填写、数据抓取
 
 用户问题：${ctx.userMessage}
 
@@ -268,11 +294,15 @@ ${userMessage}
 
 ## 可用 Agent
 - **file-analyzer**: 文件分析 — 分析文件夹结构、文件类型分布、技术栈推断、项目概览
-- **code-reviewer**: 代码审查 — 审查代码质量，发现问题和改进建议
+- **qa**: 测试修复与代码审查 — 自动测试运行、bug 修复、代码审查
 - **doc-summarizer**: 文档摘要 — 读取文档内容，总结项目核心信息
-- **file-organizer**: 文件整理 — 根据建议重新分类与整理文件
+- **daily**: 日常事务 — 新闻摘要、日常提醒、文件分类整理
 - **form-filler**: 信息采集与文档填写 — 从文档中提取待填项，对话式收集信息并自动填入文档
-- **memory**: 跨会话记忆 — 记住重要信息、回忆历史分析、管理偏好
+- **architect**: 系统架构设计 — 生成架构图、模块依赖图、数据流图
+- **researcher**: 深度研究 — 多来源调研、竞品分析、结构化报告
+- **writer**: 内容生成 — 文章、文案、邮件、社交媒体内容生成
+- **archivist**: 文档与演示 — Word/PPT/Excel/PDF/HTML 多格式文档处理
+- **browser**: 浏览器控制 — 网页自动化、表单填写、数据抓取
 
 ## 判断标准
 - 如果任务明确涉及多个方面（如"分析并整理"、"审查代码并总结文档"），则需要多 Agent 协作
@@ -344,17 +374,29 @@ ${userMessage}
         case 'file-analyzer':
           task = `从文件分析专家的角度分析项目：\n1. 分析文件夹结构和目录组织\n2. 统计文件类型分布和技术栈\n3. 识别核心文件和关键目录\n4. 评估项目规模和复杂度\n用户原始需求：${ctx.userMessage}`
           break
-        case 'code-reviewer':
-          task = `从代码审查专家的角度分析项目：\n1. 审查代码质量和架构设计\n2. 检查潜在 bug 和安全漏洞\n3. 评估代码可读性和维护性\n4. 提出性能优化建议\n用户原始需求：${ctx.userMessage}`
+        case 'qa':
+          task = `从测试修复与代码审查专家的角度分析项目：\n1. 运行自动测试并分析结果\n2. 审查代码质量和架构设计\n3. 检查潜在 bug 和安全漏洞\n4. 提出代码修复和优化建议\n用户原始需求：${ctx.userMessage}`
           break
         case 'doc-summarizer':
           task = `从文档摘要专家的角度分析项目：\n1. 查找并分析项目文档（README、文档文件等）\n2. 总结项目核心功能和目标\n3. 提取关键技术信息\n4. 评估文档完整性\n用户原始需求：${ctx.userMessage}`
           break
-        case 'file-organizer':
-          task = `从文件整理专家的角度分析项目：\n1. 评估当前文件组织方式\n2. 识别可以改进的分类方案\n3. 提出目录重组建议\n4. 制定文件整理计划\n用户原始需求：${ctx.userMessage}`
+        case 'daily':
+          task = `从日常事务专家的角度分析项目：\n1. 整理文件分类和归档\n2. 识别需要清理的文件\n3. 提出文件重组建议\n4. 生成日常任务摘要\n用户原始需求：${ctx.userMessage}`
           break
-        case 'memory':
-          task = `从记忆专家的角度协助：\n1. 检索相关的历史分析记录\n2. 回忆之前的项目上下文\n3. 提供历史参考信息\n用户原始需求：${ctx.userMessage}`
+        case 'architect':
+          task = `从系统架构设计专家的角度分析项目：\n1. 分析系统架构和模块关系\n2. 识别依赖关系和数据流\n3. 生成架构图和模块依赖图\n4. 评估架构设计质量\n用户原始需求：${ctx.userMessage}`
+          break
+        case 'researcher':
+          task = `从深度研究专家的角度分析项目：\n1. 进行多来源信息调研\n2. 对比分析竞品和方案\n3. 生成结构化研究报告\n4. 提供决策建议\n用户原始需求：${ctx.userMessage}`
+          break
+        case 'writer':
+          task = `从内容生成专家的角度分析项目：\n1. 根据需求生成文章或文案\n2. 调整内容风格和语气\n3. 生成多种版本供选择\n4. 优化内容表达\n用户原始需求：${ctx.userMessage}`
+          break
+        case 'archivist':
+          task = `从文档与演示全能专家的角度分析项目：\n1. 识别需要创建/转换的文档格式\n2. 处理 Word/PPT/Excel/PDF/HTML 文件\n3. 生成文档大纲和模板\n4. 执行格式转换\n用户原始需求：${ctx.userMessage}`
+          break
+        case 'browser':
+          task = `从浏览器控制专家的角度分析项目：\n1. 分析网页操作需求\n2. 规划自动化步骤\n3. 设计数据抓取策略\n4. 生成操作指引\n用户原始需求：${ctx.userMessage}`
           break
         case 'form-filler':
           task = `从信息采集专家的角度分析项目：\n1. 识别项目中的文档和模板文件\n2. 提取文档中需要填写的信息项\n3. 分析信息采集的完整性和规范性\n4. 提出文档填写优化建议\n用户原始需求：${ctx.userMessage}`
@@ -687,18 +729,24 @@ ${allFindings}
 ## 我的职责
 我负责理解你的自然语言需求，自动判断并分配给最合适的 Agent 处理。你不需要知道每个 Agent 的具体分工，只需要用自然语言描述需求，我来安排协作。
 
-## 我的团队
+## 我的团队（11 位成员）
 - **Charlotte** — 文件分析专家，分析文件夹结构、文件类型分布、技术栈推断
-- **William** — 代码审查专家，审查代码质量，发现问题和改进建议
 - **Amelia** — 文档摘要专家，读取文档内容，总结项目核心信息
-- **James** — 文件整理专家，根据建议重新分类与整理文件
-- **Sophie** — 跨会话记忆专家，记住重要信息、回忆历史分析、管理偏好
-- **Ethan** — 信息采集与文档填写专家，从文档中提取待填项，对话式收集信息并自动填入文档
+- **Ethan** — 信息采集与文档填写专家，对话式文档填写
+- **Atlas** — 系统架构设计专家，生成架构图、模块依赖图
+- **Audrey** — 深度研究专家，多来源调研、竞品分析
+- **Avery** — 测试修复与代码审查专家，自动测试、Bug 修复
+- **Aurora** — 日常事务专家，新闻摘要、文件分类
+- **Aria** — 内容生成专家，文章、文案、邮件生成
+- **Arthur** — 文档与演示全能专家，Word/PPT/Excel/PDF 处理
+- **Alice** — 浏览器控制专家，AI 驱动的网页自动化
 
 ## 协作场景
-- **"分析并整理这个文件夹"** → Charlotte 分析 → James 执行整理
-- **"审查代码并总结文档"** → William 审查 → Amelia 总结
-- **"分析项目并给出改进建议"** → Charlotte 分析 → William 审查 → 综合建议
+- **"分析并整理这个文件夹"** → Charlotte 分析 → Aurora 执行整理
+- **"审查代码并总结文档"** → Avery 审查 → Amelia 总结
+- **"生成架构图"** → Atlas 生成
+- **"深度研究竞品"** → Audrey 调研
+- **"生成一份 PPT"** → Arthur 处理
 
 你只需要用自然语言描述需求，我会自动判断并安排协作！`
 
@@ -787,8 +835,8 @@ ${allFindings}
     // 问候语：Oliver 直接回应，自然地问能帮什么
     if (this.isGreeting(userMessage)) {
       const greetingReplies = [
-        '你好！有什么我可以帮你的吗？我可以帮你分析项目、审查代码、总结文档、整理文件，或者填写表单，直接告诉我就行。',
-        '你好呀！今天想做什么？分析文件、审查代码、总结文档、整理文件、填写表单，我都能安排。',
+        '你好！有什么我可以帮你的吗？我可以帮你分析项目、审查代码、总结文档、生成架构图、研究竞品、生成内容，或者填写表单，直接告诉我就行。',
+        '你好呀！今天想做什么？分析文件、审查代码、生成架构、深度研究、内容创作、文档处理，我都能安排。',
         '嗨！有什么需要我帮忙的吗？直接说你的需求，我来安排合适的 Agent 处理。',
       ]
       const reply = randomPick(greetingReplies)
@@ -805,8 +853,8 @@ ${allFindings}
     const confusionPatterns = /什么意思|是什么意思|啥意思|搞不懂|不明白|不知道|为啥|为什么$/i
     if (confusionPatterns.test(msg)) {
       const confusionReplies = [
-        '抱歉让你困惑了！我是 Oliver，团队的调度助手。你可以用自然语言告诉我你想做什么，比如"分析这个项目"、"审查代码"、"填写表格"，我会安排合适的 Agent 来处理。',
-        '不好意思！简单来说，我可以帮你：分析文件结构、审查代码质量、总结文档内容、整理文件分类、填写表单文档。你想做哪个？直接说就行。',
+        '抱歉让你困惑了！我是 Oliver，团队的调度助手。你可以用自然语言告诉我你想做什么，比如"分析这个项目"、"审查代码"、"生成架构图"、"研究竞品"、"撰写文章"，我会安排合适的 Agent 来处理。',
+        '不好意思！简单来说，我可以帮你：分析文件结构、审查代码质量、生成架构图、深度研究、内容创作、文档处理、填写表单。你想做哪个？直接说就行。',
       ]
       const reply = randomPick(confusionReplies)
       if (onToken) {
@@ -873,7 +921,7 @@ ${allFindings}
   }
 
   private async answerTeamIntroduction(onToken?: (token: string) => void): Promise<string> {
-    const teamIntro = `我们团队有 7 位成员：
+    const teamIntro = `我们团队有 11 位成员：
 
 ## 团队成员
 
@@ -881,19 +929,23 @@ ${allFindings}
 |------|------|------|
 | **Oliver** | 智能调度助手 | 理解你的需求，自动分配给最合适的 Agent 处理 |
 | **Charlotte** | 文件分析专家 | 分析文件夹结构、文件类型分布、技术栈推断 |
-| **William** | 代码审查专家 | 审查代码质量，发现问题和改进建议 |
 | **Amelia** | 文档摘要专家 | 读取文档内容，总结项目核心信息 |
-| **James** | 文件整理专家 | 根据建议重新分类与整理文件 |
-| **Sophie** | 跨会话记忆专家 | 记住重要信息、回忆历史分析、管理偏好 |
-| **Ethan** | 信息采集与文档填写专家 | 从文档中提取待填项，对话式收集信息并自动填入文档 |
+| **Ethan** | 信息采集与文档填写专家 | 对话式文档填写，支持 docx/xlsx |
+| **Atlas** | 系统架构设计专家 | 生成架构图、模块依赖图、数据流图 |
+| **Audrey** | 深度研究专家 | 多来源调研、竞品分析、结构化报告 |
+| **Avery** | 测试修复与代码审查专家 | 自动运行测试、分析失败、代码审查 |
+| **Aurora** | 日常事务专家 | 新闻摘要、日常提醒、文件分类整理 |
+| **Aria** | 内容生成专家 | 文章、文案、邮件、社交媒体内容生成 |
+| **Arthur** | 文档与演示全能专家 | Word/PPT/Excel/PDF/HTML 多格式文档处理 |
+| **Alice** | 浏览器控制专家 | AI 驱动的网页自动化与交互 |
 
 ## 多 Agent 协作场景
 
 当你提出涉及多个方面的任务时，我会自动协调多个 Agent 一起工作：
 
-- **"分析并整理这个文件夹"** → Charlotte 分析结构 → James 执行整理
-- **"审查代码并总结文档"** → William 审查代码 → Amelia 总结文档
-- **"分析项目并给出改进建议"** → Charlotte 分析 → William 审查 → 综合建议
+- **"分析并整理这个文件夹"** → Charlotte 分析结构 → Aurora 执行整理
+- **"审查代码并总结文档"** → Avery 审查代码 → Amelia 总结文档
+- **"分析项目并生成架构图"** → Charlotte 分析 → Atlas 生成架构
 
 你只需要用自然语言描述需求，我会自动判断并安排协作！`
 
@@ -905,6 +957,119 @@ ${allFindings}
     }
 
     return teamIntro
+  }
+
+  // ===== 记忆调度（记住 / 回忆 / 遗忘 / 统计）=====
+  private detectMemoryIntent(userMessage: string): { type: 'remember' | 'recall' | 'forget' | 'stats' | 'none'; payload: string } {
+    const msg = userMessage.trim()
+
+    // 统计
+    if (/统计记忆|记忆统计|记忆数量|记忆有多少|记忆概况|记忆列表|看看记忆|展示记忆/i.test(msg)) {
+      return { type: 'stats', payload: msg }
+    }
+
+    // 遗忘 / 删除记忆
+    const forgetMatch = msg.match(/(忘记|遗忘|忘掉|删除记忆|删掉.*记忆|删除.*[记忆|这条])[\s:：]*(.*)/i)
+    if (forgetMatch) {
+      const payload = (forgetMatch[2] || msg).trim()
+      return { type: 'forget', payload }
+    }
+
+    // 记住 / 保存
+    const rememberMatch = msg.match(/(记住|保存|记下|写入记忆|记住这个|以后记得|别忘了|帮我记住|请记住)[\s:：]*(.*)/i)
+    if (rememberMatch) {
+      const payload = (rememberMatch[2] || msg).trim()
+      return { type: 'remember', payload }
+    }
+
+    // 回忆 / 查询记忆（带具体内容关键词）
+    const recallMatch = msg.match(/(回忆|记得吗|我记得|之前提过|上次说过|我们之前|查一下记忆|搜索记忆|找回记忆)[\s:：]*(.*)/i)
+    if (recallMatch) {
+      const payload = (recallMatch[2] || msg).trim()
+      return { type: 'recall', payload }
+    }
+
+    return { type: 'none', payload: '' }
+  }
+
+  private async handleMemoryCommand(
+    args: { memoryIntents: { type: 'remember' | 'recall' | 'forget' | 'stats'; payload: string }; folderPath: string; userMessage: string; signal?: AbortSignal; history?: { role: 'user' | 'agent'; content: string }[] },
+    onToken?: (token: string) => void
+  ): Promise<string> {
+    if (!this.memoryStore) {
+      const msg = '🛑 记忆服务尚未初始化，请稍后再试。'
+      return this.streamReply(msg, onToken)
+    }
+
+    const { type, payload } = args.memoryIntents
+    const projectPath = args.folderPath || undefined
+
+    if (type === 'remember') {
+      const contentToRemember = payload || args.userMessage.replace(/(记住|保存|记下|写入记忆|记住这个|以后记得|别忘了|帮我记住|请记住)[\s:：]+/i, '').trim()
+      if (!contentToRemember) {
+        const msg = '好的，你想记住什么内容？直接告诉我要保存的信息即可。'
+        return this.streamReply(msg, onToken)
+      }
+      const entry = this.memoryStore.upsert({
+        key: `mem:${projectPath || 'global'}:${contentToRemember.slice(0, 40)}`,
+        category: projectPath ? 'project-context' : 'user-preference',
+        content: contentToRemember,
+        tags: [],
+        projectPath,
+      })
+      this.pushConv(this.config.name, this.config.color, `🧠 已记住：${contentToRemember.slice(0, 60)}`, true)
+      const msg = `✅ 已帮你记住：\n> ${contentToRemember}\n\n（记忆 ID: \`${entry.id}\`，需要遗忘时可告诉我）`
+      return this.streamReply(msg, onToken)
+    }
+
+    if (type === 'recall') {
+      const queryText = payload || args.userMessage.replace(/(回忆|记得吗|我记得|之前提过|上次说过|我们之前|查一下记忆|搜索记忆|找回记忆)[\s:：]+/i, '').trim()
+      const memories = this.memoryStore.query({ text: queryText || undefined, projectPath, limit: 8 })
+      if (memories.length === 0) {
+        const msg = queryText ? `🔍 记忆中暂时没有与"${queryText}"相关的内容。你可以先告诉我需要长期记住的信息。` : '🔍 当前记忆中暂无记录。你可以告诉我一些需要长期记住的信息。'
+        return this.streamReply(msg, onToken)
+      }
+      this.pushConv(this.config.name, this.config.color, `📚 回忆起 ${memories.length} 条相关记忆`, true)
+      const list = memories.map((m, i) => `**${i + 1}.** [${m.category}] ${m.content}\n`).join('')
+      const msg = `📚 我回忆起以下内容：\n${list}`
+      return this.streamReply(msg, onToken)
+    }
+
+    if (type === 'forget') {
+      const target = payload.replace(/(忘记|遗忘|忘掉|删除记忆|这条)/i, '').trim()
+      if (!target) {
+        const msg = '告诉我你想删除哪条记忆，例如"忘记关于数据库的那条"。'
+        return this.streamReply(msg, onToken)
+      }
+      const candidates = this.memoryStore.query({ text: target, projectPath, limit: 20 })
+      let deleted = 0
+      for (const c of candidates) {
+        if (this.memoryStore.delete(c.id)) deleted++
+      }
+      const msg = deleted > 0
+        ? `🗑 已删除 ${deleted} 条与"${target}"相关的记忆。`
+        : `🔍 没有找到与"${target}"相关的记忆，无法删除。`
+      if (deleted > 0) this.pushConv(this.config.name, this.config.color, `🗑 已遗忘 ${deleted} 条记忆`, true)
+      return this.streamReply(msg, onToken)
+    }
+
+    // stats
+    const stats = this.memoryStore.getStats()
+    const byCategory = Object.entries(stats.byCategory).map(([k, v]) => `- ${k}: ${v} 条`).join('\n')
+    const fmt = (ts: number | null) => (ts ? new Date(ts).toLocaleString('zh-CN') : '无')
+    const msg = `📊 **记忆统计**\n\n- 总条数：**${stats.total}**\n- 按分类：\n${byCategory || '（无）'}\n- 最早记录：${fmt(stats.oldestEntry)}\n- 最新记录：${fmt(stats.newestEntry)}`
+    this.pushConv(this.config.name, this.config.color, '📊 已为你生成记忆统计', true)
+    return this.streamReply(msg, onToken)
+  }
+
+  private async streamReply(text: string, onToken?: (token: string) => void): Promise<string> {
+    if (onToken) {
+      for (const char of text) {
+        onToken(char)
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    return text
   }
 
   private keywordRoute(userMessage: string): string | null {
@@ -922,28 +1087,52 @@ ${allFindings}
       return 'file-analyzer'
     }
     
-    // code-reviewer 关键词
-    const reviewerKeywords = ['审查', '代码质量', 'bug', '漏洞', '改进', '优化']
-    if (reviewerKeywords.some(kw => msg.includes(kw))) {
-      return 'code-reviewer'
+    // qa 关键词
+    const qaKeywords = ['审查', '代码质量', 'bug', '漏洞', '改进', '优化', '测试', '修复']
+    if (qaKeywords.some(kw => msg.includes(kw))) {
+      return 'qa'
     }
     
     // doc-summarizer 关键词
-    const summarizerKeywords = ['总结', '摘要', 'readme', '项目介绍', '功能']
+    const summarizerKeywords = ['总结', '摘要', 'readme', '项目介绍', '功能', '读取文档']
     if (summarizerKeywords.some(kw => msg.includes(kw))) {
       return 'doc-summarizer'
     }
     
-    // file-organizer 关键词
-    const organizerKeywords = ['整理', '分类', '重组', '归档', '移动文件', '重新组织']
-    if (organizerKeywords.some(kw => msg.includes(kw))) {
-      return 'file-organizer'
+    // daily 关键词
+    const dailyKeywords = ['整理', '分类', '重组', '归档', '移动文件', '文件操作', '新闻', '提醒']
+    if (dailyKeywords.some(kw => msg.includes(kw))) {
+      return 'daily'
     }
     
-    // memory 关键词
-    const memoryKeywords = ['记住', '回忆', '忘了', '记忆', '之前说过', '历史记录']
-    if (memoryKeywords.some(kw => msg.includes(kw))) {
-      return 'memory'
+    // architect 关键词
+    const architectKeywords = ['架构', '设计', '系统设计', '模块', '依赖', '数据流', 'mermaid']
+    if (architectKeywords.some(kw => msg.includes(kw))) {
+      return 'architect'
+    }
+    
+    // researcher 关键词
+    const researcherKeywords = ['研究', '调研', '分析竞品', '对比', '搜索', '查找']
+    if (researcherKeywords.some(kw => msg.includes(kw))) {
+      return 'researcher'
+    }
+    
+    // writer 关键词
+    const writerKeywords = ['文章', '文案', '邮件', '写作', '生成内容', '社交媒体', '演讲稿']
+    if (writerKeywords.some(kw => msg.includes(kw))) {
+      return 'writer'
+    }
+    
+    // archivist 关键词
+    const archivistKeywords = ['文档', 'word', 'ppt', 'excel', 'pdf', '演示', '报告']
+    if (archivistKeywords.some(kw => msg.includes(kw))) {
+      return 'archivist'
+    }
+    
+    // browser 关键词
+    const browserKeywords = ['网页', '浏览器', '自动化', '网页操作', '抓取', '爬取']
+    if (browserKeywords.some(kw => msg.includes(kw))) {
+      return 'browser'
     }
     
     return null
@@ -971,17 +1160,26 @@ ${allFindings}
       const content = agentMsg.content.toLowerCase()
       
       // 根据内容判断是哪个 Agent
-      if (content.includes('directories') && content.includes('moves')) {
-        return 'file-organizer' // James 的整理计划
+      if (content.includes('代码') || content.includes('bug') || content.includes('测试') || content.includes('审查')) {
+        return 'qa' // Avery 的代码审查/测试
       }
-      if (content.includes('文件类型') || content.includes('技术栈') || content.includes('项目概览')) {
+      if (content.includes('文件类型') || content.includes('技术栈') || content.includes('项目概览') || content.includes('目录')) {
         return 'file-analyzer' // Charlotte 的分析
       }
-      if (content.includes('代码') || content.includes('bug') || content.includes('优化')) {
-        return 'code-reviewer' // William 的审查
-      }
-      if (content.includes('文档') || content.includes('readme') || content.includes('功能')) {
+      if (content.includes('文档') || content.includes('readme') || content.includes('功能') || content.includes('摘要')) {
         return 'doc-summarizer' // Amelia 的摘要
+      }
+      if (content.includes('架构') || content.includes('模块') || content.includes('依赖') || content.includes('mermaid')) {
+        return 'architect' // Atlas 的架构
+      }
+      if (content.includes('研究') || content.includes('调研') || content.includes('竞品')) {
+        return 'researcher' // Audrey 的研究
+      }
+      if (content.includes('整理') || content.includes('分类') || content.includes('归档')) {
+        return 'daily' // Aurora 的整理
+      }
+      if (content.includes('文档') || content.includes('word') || content.includes('ppt') || content.includes('excel')) {
+        return 'archivist' // Arthur 的文档
       }
     }
 

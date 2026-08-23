@@ -674,24 +674,9 @@ export const ChatInput: React.FC = () => {
     }
   }
 
-  const allAgents = agentRegistry.getAll()
-  const quickActions = allAgents.map((a) => ({
-    id: a.id,
-    label: a.name,
-    icon: React.createElement(a.icon, { size: 12 }),
-  }))
-
   return (
     <div className="border-t-2 border-brutal-black bg-white p-3">
-      <div className="flex items-center gap-1.5 mb-2">
-        {quickActions.map((a) => (
-          <button key={a.id}
-            onClick={() => { useChatStore.getState().setActiveAgent(a.id) }}
-            className={`tab-brutal text-xs flex items-center gap-1.5 ${activeAgentId === a.id ? 'active' : ''}`}>
-            {a.icon}{a.label}
-          </button>
-        ))}
-        <div className="flex-1" />
+      <div className="flex items-center justify-end mb-2">
         <span className="text-[10px] text-black/70 font-mono">{activeFolder ? 'Enter 发送' : '请选择文件夹'}</span>
       </div>
       <div className="flex items-center gap-2">

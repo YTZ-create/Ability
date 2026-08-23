@@ -13,6 +13,10 @@ export interface DocxStructureInfo {
   paragraphCount: number
   tableCount: number
   cellCount: number
+  // 修复7：格式快照验证 - 新增字段
+  mergedCellCount: number  // 合并单元格数量（vMerge 标记数）
+  fonts: string[]  // 文档中使用的字体列表
+  alignments: string[]  // 对齐方式列表
 }
 
 /**
@@ -58,6 +62,42 @@ function escapeXml(str: string): string {
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * 修复5：将包含换行符的文本转换为多个 OOXML 段落
+ * 每个 \n 拆成独立的 <w:p>，因为 OOXML 不解析 \n 为段落分隔
+ */
+function textToParagraphs(text: string, baseFont: string = '宋体', baseSize: number = 10.5): string {
+  if (!text.includes('\n')) {
+    return ''  // 没有换行，由调用方处理
+  }
+  
+  const lines = text.split('\n').filter(l => l.trim())
+  return lines.map(line => {
+    const escaped = escapeXml(line.trim())
+    return `<w:p>
+      <w:pPr><w:rPr>
+        <w:rFonts w:ascii="${baseFont}" w:eastAsia="${baseFont}"/>
+        <w:sz w:val="${baseSize * 2}"/>
+      </w:rPr></w:pPr>
+      <w:r><w:rPr>
+        <w:rFonts w:ascii="${baseFont}" w:eastAsia="${baseFont}"/>
+        <w:sz w:val="${baseSize * 2}"/>
+      </w:rPr><w:t>${escaped}</w:t></w:r>
+    </w:p>`
+  }).join('')
+}
+
+/**
+ * 修复6：判断单元格文本是否为提示文字（可安全覆盖）
+ * 特征：以"请"开头、长度 < 30 字、没有实际内容
+ */
+function isHintText(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.length === 0 || trimmed.length > 30) return false
+  // 以"请"开头，且后面跟着动词
+  return /^请[填写简述提供补充说明描述列出]/.test(trimmed)
 }
 
 /**
@@ -366,7 +406,13 @@ export async function fillDocxFile(
 
     const label = field.label
     const value = field.value
-    const escapedValue = escapeXml(value)
+    let escapedValue = escapeXml(value)
+
+    // 修复5：检测换行符，如果包含则转换为多个段落
+    const hasNewlines = value.includes('\n')
+    if (hasNewlines) {
+      console.log(`[docxHandler][Smart] Value contains newlines, will convert to multiple paragraphs`)
+    }
 
     console.log(`\n[docxHandler][Smart] === Processing: "${label}" = "${value}" ===`)
 
@@ -519,14 +565,28 @@ export async function fillDocxFile(
               }
             }
 
-            // 如果单元格为空或仅含空白，直接填入
-            if (!filled && (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim()))) {
-              const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
-              if (result.success) {
-                filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
-                filled = true
-                filledCount++
-                console.log(`[docxHandler][Smart] ✓ Strategy -2b: Table keyword anchor + cell replacement (empty cell)`)
+            // 如果单元格为空或仅含空白或提示文字，直接填入
+            // 修复6：增加提示文字检测
+            const isHint = isHintText(cellText)
+            if (!filled && (cellText.trim() === '' || isHint || /^[：:\s]+$/.test(cellText.trim()))) {
+              // 修复5：含换行符时使用多段落填写
+              if (hasNewlines) {
+                const mpResult = fillCellWithMultiParagraph(nextCellXml, value)
+                if (mpResult.success) {
+                  filledXml = filledXml.substring(0, nextCellStart) + mpResult.newCellXml + filledXml.substring(nextCellEnd)
+                  filled = true
+                  filledCount++
+                  console.log(`[docxHandler][Smart] ✓ Strategy -2b: Multi-paragraph fill (${value.split('\n').length} lines)`)
+                }
+              } else {
+                const searchText = isHint ? cellText.trim() : (cellText.trim() || ' ')
+                const result = replaceInCell(nextCellXml, searchText, escapedValue)
+                if (result.success) {
+                  filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                  filled = true
+                  filledCount++
+                  console.log(`[docxHandler][Smart] ✓ Strategy -2b: Table keyword anchor + cell replacement (${isHint ? 'hint text' : 'empty cell'})`)
+                }
               }
             }
           }
@@ -584,13 +644,18 @@ export async function fillDocxFile(
                     filledCount++
                     console.log(`[docxHandler][Smart] ✓ Strategy -2d: Table label keyword anchor + cell replacement`)
                   }
-                } else if (cellText.trim() === '' || /^[：:\s]+$/.test(cellText.trim())) {
-                  const result = replaceInCell(nextCellXml, cellText.trim() || ' ', escapedValue)
-                  if (result.success) {
-                    filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
-                    filled = true
-                    filledCount++
-                    console.log(`[docxHandler][Smart] ✓ Strategy -2e: Table label keyword anchor + empty cell fill`)
+                } else {
+                  // 修复6：增加提示文字检测
+                  const isHint = isHintText(cellText)
+                  if (cellText.trim() === '' || isHint || /^[：:\s]+$/.test(cellText.trim())) {
+                    const searchText = isHint ? cellText.trim() : (cellText.trim() || ' ')
+                    const result = replaceInCell(nextCellXml, searchText, escapedValue)
+                    if (result.success) {
+                      filledXml = filledXml.substring(0, nextCellStart) + result.newCellXml + filledXml.substring(nextCellEnd)
+                      filled = true
+                      filledCount++
+                      console.log(`[docxHandler][Smart] ✓ Strategy -2e: Table label keyword anchor + ${isHint ? 'hint text' : 'empty cell'} fill`)
+                    }
                   }
                 }
               }
@@ -1320,8 +1385,27 @@ export function extractDocxStructureInfo(docXml: string): DocxStructureInfo {
   const paragraphCount = (docXml.match(/<w:p\b/g) || []).length
   const tableCount = (docXml.match(/<w:tbl\b/g) || []).length
   const cellCount = (docXml.match(/<w:tc\b/g) || []).length
+  
+  // 修复7：提取合并单元格数量
+  const mergedCellCount = (docXml.match(/<w:vMerge/g) || []).length
+  
+  // 修复7：提取使用的字体列表
+  const fontSet = new Set<string>()
+  const fontMatches = docXml.matchAll(/<w:rFonts[^>]*w:ascii="([^"]+)"/g)
+  for (const match of fontMatches) {
+    fontSet.add(match[1])
+  }
+  const fonts = Array.from(fontSet)
+  
+  // 修复7：提取对齐方式列表
+  const alignSet = new Set<string>()
+  const alignMatches = docXml.matchAll(/<w:jc\s+w:val="([^"]+)"/g)
+  for (const match of alignMatches) {
+    alignSet.add(match[1])
+  }
+  const alignments = Array.from(alignSet)
 
-  return { paragraphCount, tableCount, cellCount }
+  return { paragraphCount, tableCount, cellCount, mergedCellCount, fonts, alignments }
 }
 
 /**
@@ -1341,6 +1425,23 @@ export function compareDocxStructure(
   }
   if (before.cellCount !== after.cellCount) {
     warnings.push(`单元格数变化: ${before.cellCount} → ${after.cellCount}`)
+  }
+  
+  // 修复7：检查合并单元格数量是否变化
+  if (before.mergedCellCount !== after.mergedCellCount) {
+    warnings.push(`合并单元格数变化: ${before.mergedCellCount} → ${after.mergedCellCount}（可能破坏了 vMerge 结构）`)
+  }
+  
+  // 修复7：检查是否丢失了原有字体
+  const lostFonts = before.fonts.filter(f => !after.fonts.includes(f))
+  if (lostFonts.length > 0) {
+    warnings.push(`字体丢失: ${lostFonts.join(', ')}`)
+  }
+  
+  // 修复7：检查是否丢失了对齐方式
+  const lostAlignments = before.alignments.filter(a => !after.alignments.includes(a))
+  if (lostAlignments.length > 0) {
+    warnings.push(`对齐方式丢失: ${lostAlignments.join(', ')}`)
   }
 
   return {
@@ -1640,6 +1741,49 @@ function replaceInCell(
   }
 
   return { success: false, newCellXml }
+}
+
+/**
+ * 修复5：用多段落内容替换单元格的第一个段落
+ * 将含 \n 的文本拆分为多个 <w:p>，继承原段落格式
+ * 用于表格单元格中需要多行内容的场景（如安全预案、日程安排等）
+ */
+function fillCellWithMultiParagraph(
+  cellXml: string,
+  multiLineText: string,
+  searchText?: string  // 要替换的原始文本（占位符或提示文字），不传则替换第一个段落的全部内容
+): { success: boolean; newCellXml: string } {
+  const lines = multiLineText.split('\n').filter(l => l.trim())
+  if (lines.length <= 1) return { success: false, newCellXml: cellXml }
+
+  // 找到第一个段落
+  const firstParaMatch = cellXml.match(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/)
+  if (!firstParaMatch) return { success: false, newCellXml: cellXml }
+
+  const firstParaXml = firstParaMatch[0]
+
+  // 提取第一个段落的格式属性（<w:pPr>）
+  const pPrMatch = firstParaXml.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/)
+  const pPrXml = pPrMatch ? pPrMatch[0] : ''
+
+  // 提取第一个段落第一个 run 的格式属性（<w:rPr>）
+  const rPrMatch = firstParaXml.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/)
+  const rPrXml = rPrMatch ? rPrMatch[0] : ''
+
+  // 构建多个段落
+  const newParagraphs = lines.map(line => {
+    const escaped = escapeXml(line.trim())
+    return `<w:p>${pPrXml}<w:r>${rPrXml}<w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`
+  })
+
+  // 用新段落替换第一个段落，并删除后续段落（避免重复内容）
+  // 先删除所有段落
+  const cellWithoutParas = cellXml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, '')
+  // 在 </w:tc> 前插入新段落
+  const newCellXml = cellWithoutParas.replace('</w:tc>', newParagraphs.join('') + '</w:tc>')
+
+  console.log(`[docxHandler][MultiPara] ✓ Created ${lines.length} paragraphs in cell`)
+  return { success: true, newCellXml }
 }
 
 /**

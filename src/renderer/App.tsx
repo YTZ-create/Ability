@@ -6,6 +6,8 @@ import { TokenUsageDashboard } from './components/layout/TokenUsagePanel'
 import { ChatView } from './components/chat/ChatView'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { AgentConversation } from './components/detail/AgentConversation'
+import { MemoryViewer } from './components/memory/MemoryViewer'
+import { CapabilitiesHub } from './components/capabilities/CapabilitiesHub'
 import { useChatStore } from './stores/chatStore'
 import { useFormFillStore } from './stores/formFillStore'
 import { useFolderStore } from './stores/folderStore'
@@ -15,6 +17,7 @@ import { X, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react'
 
 const App: React.FC = () => {
   const [showDetail, setShowDetail] = useState(true)
+  const [detailView, setDetailView] = useState<'agent' | 'memory' | 'capabilities'>('agent')
   const [detailFile, setDetailFile] = useState<FileEntry | null>(null)
   const messages = useChatStore((s) => s.messages)
   const clearChat = useChatStore((s) => s.clearChat)
@@ -77,14 +80,33 @@ const App: React.FC = () => {
 
         {showDetail && (
           <div className="w-72 flex-shrink-0 border-l-2 border-brutal-black bg-white flex flex-col">
-            <div className="flex items-center justify-between px-3 py-2 border-b-2 border-brutal-black">
-              <span className="font-bold text-xs">Agent 对话</span>
-              <button onClick={() => setShowDetail(false)} className="p-0.5 hover:bg-brutal-pink hover:text-white">
+            <div className="flex items-center justify-between px-2 py-2 border-b-2 border-brutal-black gap-1">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setDetailView('agent')}
+                  className={`tab-brutal !px-2 !py-1 !text-[11px] ${detailView === 'agent' ? 'active' : ''}`}
+                >
+                  Agent 对话
+                </button>
+                <button
+                  onClick={() => setDetailView('memory')}
+                  className={`tab-brutal !px-2 !py-1 !text-[11px] ${detailView === 'memory' ? 'active' : ''}`}
+                >
+                  记忆
+                </button>
+                <button
+                  onClick={() => setDetailView('capabilities')}
+                  className={`tab-brutal !px-2 !py-1 !text-[11px] ${detailView === 'capabilities' ? 'active' : ''}`}
+                >
+                  能力
+                </button>
+              </div>
+              <button onClick={() => setShowDetail(false)} className="p-0.5 hover:bg-brutal-pink hover:text-white flex-shrink-0">
                 <X size={14} />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <AgentConversation />
+              {detailView === 'memory' ? <MemoryViewer /> : detailView === 'capabilities' ? <CapabilitiesHub /> : <AgentConversation />}
             </div>
           </div>
         )}

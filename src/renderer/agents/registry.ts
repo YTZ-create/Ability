@@ -1,11 +1,15 @@
 import { BaseAgent, type AgentConfig } from './base'
 import { FileAnalyzerAgent } from './fileAnalyzer'
-import { CodeReviewerAgent } from './codeReviewer'
 import { DocSummarizerAgent } from './docSummarizer'
-import { FileOrganizerAgent } from './fileOrganizer'
 import { FormFillerAgent } from './formFiller'
 import { LeaderAgent } from './leader'
-import { MemoryAgent } from './memoryAgent'
+import { ArchitectAgent } from './atlas'
+import { ResearcherAgent } from './audrey'
+import { QA_Agent } from './avery'
+import { DailyAgent } from './aurora'
+import { WriterAgent } from './aria'
+import { ArchivistAgent } from './arthur'
+import { BrowserAgent } from './alice'
 import type { PlatformAPI } from '../api/platformAPI'
 import type { MemoryStore } from '../memory/memoryStore'
 
@@ -14,14 +18,15 @@ class AgentRegistry {
 
   constructor(platform: PlatformAPI, memoryStore?: MemoryStore) {
     this.register(new FileAnalyzerAgent(platform))
-    this.register(new CodeReviewerAgent(platform))
     this.register(new DocSummarizerAgent(platform))
-    this.register(new FileOrganizerAgent(platform))
     this.register(new FormFillerAgent(platform))
-    if (memoryStore) {
-      this.register(new MemoryAgent(platform, memoryStore))
-    }
-    // LeaderAgent 最后注册，因为它依赖其他 Agent，可选注入 memoryStore
+    this.register(new ArchitectAgent(platform))
+    this.register(new ResearcherAgent(platform))
+    this.register(new QA_Agent(platform))
+    this.register(new DailyAgent(platform))
+    this.register(new WriterAgent(platform))
+    this.register(new ArchivistAgent(platform))
+    this.register(new BrowserAgent(platform))
     this.register(new LeaderAgent(platform, memoryStore))
   }
 

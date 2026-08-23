@@ -2,9 +2,68 @@
 
 基于多 Agent 协作的桌面 AI 助手，支持文件夹分析、代码审查、文档摘要、文件整理、**智能表单填写**等功能。
 
-> **当前版本：v2.1.5**
+> **当前版本：v3.0.0 Beta**
 
 ## 版本历史
+
+### 3.0.0 Beta（2026-08-22）
+
+#### Agent 团队重构（核心）
+
+- **11 Agent 并行协作体系**：Oliver（调度）/ Charlotte（文件分析）/ Amelia（文档摘要）/ Ethan（信息采集与表单填写）/ Atlas（架构设计）/ Audrey（深度研究）/ Avery（QA 与代码审查）/ Aurora（日常事务）/ Aria（内容生成）/ Arthur（文档与演示）/ Alice（浏览器控制）
+- **Leader 路由引擎增强**：确定性关键词预检 + 连续对话路由 + 表单填写强制拦截
+- **Agent 对话面板**：右侧面板实时展示子 Agent 工作过程，支持新建对话一键清空
+
+#### 平台抽象层（PlatformAPI）
+
+- 引入 `PlatformAPI` 抽象接口，所有 Agent 通过统一接口调用原生能力（文件系统 / 存储 / 窗口 / OS），为跨平台（鸿蒙等）预留扩展
+- **新增能力**：行级 diff（LCS 算法）、文件监听（mtime 轮询）、系统桌面通知
+
+#### 智能记忆系统
+
+- **L0-L3 记忆层级**：瞬时上下文 → 会话历史 → 会话总结 → 长期偏好/规则，含 levelTTL 自动过期
+- **统一记忆存储**：基于 key-value 的持久化层，按层级索引
+
+#### 定时任务引擎
+
+- cron 5 字段解析/匹配引擎，全局调度器，支持定时触发 Agent 任务
+
+#### 能力组件库（9 个能力面板）
+
+- **文件管理器**（FileManager）：创建/移动/重命名/删除/下载/预览
+- **代码编辑器**（CodeEditor）：高亮/行号/保存/复制
+- **Diff 对比器**（DiffViewer）：行级 diff 可视化
+- **图表设计器**（DiagramDesigner）：支持 27 种 mermaid 图表类型（流程图/架构图/时序图等）
+- **任务调度器**（TaskScheduler）：定时任务 CRUD
+- **插件管理器**（PluginManager）：本地工具探测与状态
+- **研究报告器**（ResearchReport）：深度研究报告结构输出
+- **文档生成器**（DocumentProduction）：Word/PPT/Excel/PDF 生成
+- **能力中心**（CapabilitiesHub）：9 个能力组件统一入口
+
+#### 文档与演示生产力
+
+- **Word/PPT/Excel/PDF 生成**：基于 `docx` / `pptxgenjs` / `xlsx` / `pdf-lib`
+- **PDF 智能分析**：pdf-inspector CLI 探测 + pdf-parse 回退
+- **代码审查 CLI**：open-code-review CLI 桥接 + 本地规则回退
+
+#### Skill 系统
+
+- **diagram-design Skill**：27 种视觉类型 + Brutalist 风格指南
+- **code-review Skill**：按语言/路径/变更类型的审查规则
+- **skills 路由配置**：41 条 Agent 路由规则（routing.json）
+- **竞品分析模板**（competitive.md）：Audrey 交叉验证方法论与矛盾标注
+
+#### 代码基础设施
+
+- **代码调用关系分析**（codeGraph）：import/调用边分析 + 反向引用/统计
+- **工具索引**（toolRegistry）：扫描 15 个 CLI 工具可用性与版本
+
+#### 已知问题（后续更新逐步修复）
+
+- Ethan Agent 部分文档填写场景仍存在下划线错位、填写失败等历史问题
+- 部分能力组件（浏览器控制、代码审查 CLI 完整集成）依赖外部环境，暂为框架态
+
+---
 
 ### 2.1.5（2026-07-30）
 

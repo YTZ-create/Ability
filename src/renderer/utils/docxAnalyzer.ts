@@ -21,6 +21,21 @@ export interface DocxStructure {
   headers: HeaderFooterInfo[]
   footers: HeaderFooterInfo[]
   textBoxes: TextBoxInfo[]
+  summary: DocxSummary
+}
+
+/**
+ * 文档结构摘要（供 LLM 快速理解文档全貌）
+ */
+export interface DocxSummary {
+  totalParagraphs: number
+  totalTables: number
+  tableDimensions: string[]  // 如 ["26×9", "5×4", "4×3"]
+  coverFields: string[]  // 封面填空，如 ["申报学院", "团队名称"]
+  hasMergedCells: boolean
+  totalPlaceholders: number
+  fillableCellCount: number
+  labelCellCount: number
 }
 
 export interface ParagraphInfo {
@@ -44,6 +59,9 @@ export interface TableInfo {
   hasPlaceholder: boolean  // 是否包含占位符
   isReadOnly?: boolean  // 是否为只读单元格（题干列）
   isFillable?: boolean  // 是否为可填写单元格（右侧填写列）
+  vMergeType?: 'restart' | 'continue'  // 合并单元格类型
+  labelFor?: string  // 如果是标签格，指向对应的填写格 cellRef
+  filledBy?: string  // 如果是填写格，指向对应的标签格 cellRef
 }
 
 export interface BookmarkInfo {
@@ -107,15 +125,28 @@ export function analyzeDocxStructure(rawContent: ArrayBuffer | string): DocxStru
 
   console.log('[docxAnalyzer] Starting document structure analysis...')
 
+  const paragraphs = extractParagraphs(docXml)
+  const tables = extractTables(docXml)
+  const bookmarks = extractBookmarks(docXml)
+  const formFields = extractFormFields(docXml)
+  const placeholders = extractPlaceholders(docXml)
+  const headers = extractHeadersFooters(zip, 'header')
+  const footers = extractHeadersFooters(zip, 'footer')
+  const textBoxes = extractTextBoxes(docXml)
+
+  // 生成结构摘要
+  const summary = generateDocxSummary(paragraphs, tables, placeholders)
+
   const structure: DocxStructure = {
-    paragraphs: extractParagraphs(docXml),
-    tables: extractTables(docXml),
-    bookmarks: extractBookmarks(docXml),
-    formFields: extractFormFields(docXml),
-    placeholders: extractPlaceholders(docXml),
-    headers: extractHeadersFooters(zip, 'header'),
-    footers: extractHeadersFooters(zip, 'footer'),
-    textBoxes: extractTextBoxes(docXml),
+    paragraphs,
+    tables,
+    bookmarks,
+    formFields,
+    placeholders,
+    headers,
+    footers,
+    textBoxes,
+    summary,
   }
 
   console.log('[docxAnalyzer] Analysis complete:')
@@ -127,8 +158,64 @@ export function analyzeDocxStructure(rawContent: ArrayBuffer | string): DocxStru
   console.log(`  - Headers: ${structure.headers.length}`)
   console.log(`  - Footers: ${structure.footers.length}`)
   console.log(`  - Text Boxes: ${structure.textBoxes.length}`)
+  console.log(`  - Summary: ${summary.totalTables} tables, ${summary.totalPlaceholders} placeholders, ${summary.fillableCellCount} fillable cells`)
 
   return structure
+}
+
+/**
+ * 生成文档结构摘要
+ */
+function generateDocxSummary(
+  paragraphs: ParagraphInfo[],
+  tables: TableInfo[],
+  placeholders: PlaceholderInfo[]
+): DocxSummary {
+  // 统计表格维度（按表格分组）
+  const tableDimensions: string[] = []
+  const tableMap = new Map<string, { maxRow: number; maxCol: number }>()
+  
+  for (const table of tables) {
+    // 使用 rowIndex 作为表格标识（简化处理）
+    const tableKey = `table_${table.rowIndex}`
+    if (!tableMap.has(tableKey)) {
+      tableMap.set(tableKey, { maxRow: 0, maxCol: 0 })
+    }
+    const dim = tableMap.get(tableKey)!
+    dim.maxRow = Math.max(dim.maxRow, table.rowIndex + 1)
+    dim.maxCol = Math.max(dim.maxCol, table.colIndex + 1)
+  }
+  
+  for (const [, dim] of tableMap) {
+    tableDimensions.push(`${dim.maxRow}×${dim.maxCol}`)
+  }
+  
+  // 提取封面字段（前 10 个段落的占位符）
+  const coverFields: string[] = []
+  const coverPlaceholders = placeholders.filter(p => p.paragraphIndex < 10)
+  for (const p of coverPlaceholders) {
+    if (p.context && !coverFields.includes(p.context)) {
+      coverFields.push(p.context)
+    }
+  }
+  
+  // 统计合并单元格
+  const hasMergedCells = tables.some(t => t.isMerged)
+  
+  // 统计可填写单元格和标签单元格
+  const fillableCellCount = tables.filter(t => t.isFillable).length
+  const labelCellCount = tables.filter(t => t.isReadOnly).length
+  
+  return {
+    totalParagraphs: paragraphs.length,
+    totalTables: tableMap.size,
+    tableDimensions,
+    coverFields,
+    hasMergedCells,
+    totalPlaceholders: placeholders.length,
+    fillableCellCount,
+    labelCellCount,
+  }
 }
 
 /**
@@ -181,6 +268,32 @@ function extractParagraphs(docXml: string): ParagraphInfo[] {
 }
 
 /**
+ * 判断单元格是否为标签格（启发式）
+ * 特征：短文本（< 15 字）+ (加粗 或 居中 或 冒号结尾)
+ */
+function isLabelCell(cellXml: string, text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.length === 0 || trimmed.length >= 15) return false
+  const isBold = cellXml.includes('<w:b/>') || cellXml.includes('<w:b ')
+  const isCentered = /<w:jc\s+w:val="center"/.test(cellXml)
+  const endsWithColon = /[：:]$/.test(trimmed)
+  return isBold || isCentered || endsWithColon
+}
+
+/**
+ * 判断单元格是否为填写格（启发式）
+ * 特征：完全空白 或 包含占位符 或 灰色提示文字
+ */
+function isFillableCell(cellXml: string, text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed === '') return true
+  if (/[＿_]{3,}|【[^】]+】|\{[^}]+\}/.test(text)) return true
+  // 灰色提示文字（检查字体颜色）
+  if (/<w:color\s+w:val="(808080|A6A6A6|BFBFBF|999999|C0C0C0)"/.test(cellXml)) return true
+  return false
+}
+
+/**
  * 提取表格信息
  */
 function extractTables(docXml: string): TableInfo[] {
@@ -220,6 +333,12 @@ function extractTables(docXml: string): TableInfo[] {
         const gridSpanMatch = cellXml.match(/<w:gridSpan\s+w:val="(\d+)"/)
         const vMergeMatch = cellXml.match(/<w:vMerge(?:\s+w:val="([^"]+)")?/)
         const isMerged = !!(gridSpanMatch || vMergeMatch)
+        
+        // 区分 vMerge 类型：restart 或 continue
+        let vMergeType: 'restart' | 'continue' | null = null
+        if (vMergeMatch) {
+          vMergeType = vMergeMatch[1] === 'continue' ? 'continue' : 'restart'
+        }
 
         // 检查是否为空
         const isEmpty = text.trim() === ''
@@ -230,23 +349,31 @@ function extractTables(docXml: string): TableInfo[] {
         // 检查是否包含占位符
         const hasPlaceholder = /[＿_]{3,}|【[^】]+】|\{[^}]+\}/.test(text)
 
-        // 区域角色划分：识别只读题干列和可填写列
+        // ============================================================
+        // 修复2：启发式识别标签格/填写格（优先）+ 列索引兜底
+        // ============================================================
+        const heuristicLabel = isLabelCell(cellXml, text)
+        const heuristicFillable = isFillableCell(cellXml, text)
+
         let isReadOnly = false
         let isFillable = false
         
-        // 规则1：第0列（最左侧）通常是题干列，标记为只读
-        if (colIndex === 0 && !isEmpty && !hasPlaceholder) {
+        // 优先使用启发式判断
+        if (heuristicLabel && !hasPlaceholder) {
           isReadOnly = true
-        }
-        
-        // 规则2：第1列及以后的列，如果是空单元格或包含占位符，标记为可填写
-        if (colIndex >= 1 && (isEmpty || hasPlaceholder)) {
+        } else if (heuristicFillable && !heuristicLabel) {
           isFillable = true
-        }
-        
-        // 规则3：包含标签（如"姓名："）的单元格标记为只读
-        if (hasLabel && !hasPlaceholder) {
-          isReadOnly = true
+        } else {
+          // 兜底：列索引规则
+          if (colIndex === 0 && !isEmpty && !hasPlaceholder) {
+            isReadOnly = true
+          }
+          if (colIndex >= 1 && (isEmpty || hasPlaceholder)) {
+            isFillable = true
+          }
+          if (hasLabel && !hasPlaceholder) {
+            isReadOnly = true
+          }
         }
 
         tables.push({
@@ -260,11 +387,36 @@ function extractTables(docXml: string): TableInfo[] {
           hasPlaceholder,
           isReadOnly,
           isFillable,
+          vMergeType: vMergeType || undefined,
         })
 
         colIndex++
       }
       rowIndex++
+    }
+  }
+
+  // ============================================================
+  // 修复3：后处理 - 建立标签→填写格的关联映射
+  // ============================================================
+  for (let i = 0; i < tables.length; i++) {
+    const cell = tables[i]
+    // 跳过 continue 行（影子 cell）
+    if (cell.vMergeType === 'continue') continue
+    
+    if (cell.isReadOnly && !cell.isFillable && !cell.labelFor) {
+      // 找到同一行的下一个填写格（跳过 continue 行）
+      const sameRowFillable = tables.find(t => 
+        t.rowIndex === cell.rowIndex && 
+        t.colIndex > cell.colIndex &&
+        t.vMergeType !== 'continue' &&
+        t.isFillable &&
+        !t.filledBy  // 尚未被其他标签关联
+      )
+      if (sameRowFillable) {
+        cell.labelFor = sameRowFillable.cellRef
+        sameRowFillable.filledBy = cell.cellRef
+      }
     }
   }
 
@@ -607,13 +759,23 @@ export function extractFillableLocations(structure: DocxStructure): Array<{
     context?: string
   }> = []
 
-  // 1. 表格中的空白单元格或占位符单元格
+  // 1. 表格中的空白单元格或占位符单元格（跳过 vMerge continue 行）
   for (const table of structure.tables) {
+    // 跳过 vMerge continue 行（影子 cell）
+    if (table.vMergeType === 'continue') {
+      continue
+    }
+    
     if (table.isEmpty || table.hasPlaceholder) {
+      // 如果是填写格，尝试找到对应的标签格
+      const labelCell = table.filledBy 
+        ? structure.tables.find(t => t.cellRef === table.filledBy)
+        : null
+      
       locations.push({
         type: 'table-cell',
         cellRef: table.cellRef,
-        context: table.text,
+        context: labelCell ? `${labelCell.text} → ${table.cellRef}` : table.text,
       })
     }
   }

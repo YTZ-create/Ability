@@ -62,7 +62,7 @@ export const Sidebar: React.FC = () => {
 
         {/* ── Section: 文件夹 ── */}
         <div className="border-b-2 border-brutal-black">
-          <div className="flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
+          <div className="section-header flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
             <div className="flex items-center gap-1.5">
               <div className="w-1 h-4 bg-brutal-yellow border border-brutal-black" />
               <span className="font-bold text-xs uppercase text-black/80">文件夹</span>
@@ -117,7 +117,7 @@ export const Sidebar: React.FC = () => {
 
         {/* ── Section: Agent ── */}
         <div className="border-b-2 border-brutal-black">
-          <div className="flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
+          <div className="section-header flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
             <div className="flex items-center gap-1.5">
               <div className="w-1 h-4 bg-brutal-pink border border-brutal-black" />
               <span className="font-bold text-xs text-black/80">AI Agent</span>
@@ -157,7 +157,7 @@ export const Sidebar: React.FC = () => {
                   className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-all duration-150 border-l-4 ${a.id === activeAgentId ? 'bg-brutal-yellow border-brutal-yellow' : 'border-transparent hover:bg-brutal-cream hover:border-brutal-black'}`}
                   style={a.id === activeAgentId ? { boxShadow: 'inset 3px 3px 0 #141111' } : undefined}
                 >
-                  <div className="w-6 h-6 flex items-center justify-center flex-shrink-0 border-2 border-brutal-black rounded-[3px]" style={{ backgroundColor: a.color, boxShadow: '2px 2px 0 #141111' }}>
+                  <div className="w-6 h-6 flex items-center justify-center flex-shrink-0 border-2 border-brutal-black rounded-[3px] relative" style={{ backgroundColor: a.color, boxShadow: '2px 2px 0 #141111' }}>
                     {(() => { const Icon = a.icon; return <Icon size={14} strokeWidth={2.5} className="text-brutal-black" /> })()}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -166,6 +166,7 @@ export const Sidebar: React.FC = () => {
                       {a.id === 'leader' && (
                         <span className="text-[8px] text-black/70 font-mono bg-brutal-yellow px-1 border border-brutal-black rounded-[3px]">推荐</span>
                       )}
+                      <span className="status-dot status-dot--online flex-shrink-0" title="就绪" />
                     </div>
                     <div className="text-[10px] text-black/70 truncate mt-0.5">{a.description}</div>
                   </div>
@@ -177,7 +178,7 @@ export const Sidebar: React.FC = () => {
 
         {/* ── Section: 对话历史 ── */}
         <div className="border-b-2 border-brutal-black">
-          <div className="flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
+          <div className="section-header flex items-center justify-between gap-2 px-3 py-2 bg-brutal-cream">
             <div className="flex items-center gap-1.5">
               <div className="w-1 h-4 bg-brutal-lavender border border-brutal-black" />
               <span className="font-bold text-xs uppercase text-black/80">历史</span>

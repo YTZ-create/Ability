@@ -17,6 +17,7 @@ export interface FileEntry {
 }
 
 // ---- 文件系统 ----
+export type WatchEvent = 'changed' | 'created' | 'deleted'
 export interface PlatformFS {
   scanDirectory(dirPath: string, onProgress?: (percent: number, current: number, total: number) => void): Promise<FileEntry[]>
   readFile(filePath: string): Promise<{ content: string | null; error: string | null; size: number }>
@@ -27,6 +28,10 @@ export interface PlatformFS {
   moveFile(sourcePath: string, destPath: string): Promise<{ success: boolean; error?: string }>
   moveDirectory(sourcePath: string, destPath: string): Promise<{ success: boolean; error?: string }>
   searchInDirectory(dirPath: string, keyword: string): Promise<{ file: FileEntry; matches: { line: number; content: string }[] }[]>
+  /** 行级 diff：返回带 + / - / 空 前缀的统一文本（无需外部依赖） */
+  diff(oldText: string, newText: string): string
+  /** 文件监听（轮询 mtime），返回取消订阅函数 */
+  fileWatch(path: string, callback: (evt: WatchEvent) => void): () => void
 }
 
 // ---- 存储 ----
@@ -52,6 +57,8 @@ export interface PlatformWindow {
 // ---- OS 命令 ----
 export interface PlatformOS {
   execCommand(command: string, timeoutMs?: number): Promise<{ stdout: string; stderr: string; exitCode: number }>
+  /** 系统桌面通知 */
+  notify(title: string, body: string): void
 }
 
 // ---- 平台统一接口 ----

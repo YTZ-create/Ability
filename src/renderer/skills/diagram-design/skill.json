@@ -1,0 +1,12 @@
+{
+  "name": "diagram-design",
+  "description": "编辑级图表渲染：用独立 HTML 生成 27 种视觉类型（流程图/架构图/时序图/数据流/状态机/脑图等），遵循 Brutalist 设计规范。",
+  "version": "1.0.0",
+  "agents": ["Atlas"],
+  "references": [
+    "references/style-guide.md",
+    "references/type-flow.md",
+    "references/type-architecture.md",
+    "references/type-overview.md"
+  ]
+}
