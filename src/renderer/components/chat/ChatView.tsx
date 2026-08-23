@@ -1,8 +1,7 @@
 import React, { useRef, useEffect } from 'react'
-import { Bot, Sparkles } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useFormFillStore } from '../../stores/formFillStore'
-import { agentRegistry } from '../../agents/registry'
+import { useSidebarStore } from '../../stores/sidebarStore'
 import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
 import { FieldSelector } from './FieldSelector'
@@ -26,8 +25,12 @@ export const ChatView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-brutal-cream">
-        {messages.length === 0 ? <WelcomeScreen /> : (
+      <div ref={scrollRef} className={`flex-1 bg-brutal-cream ${messages.length === 0 ? 'overflow-hidden flex items-center justify-center' : 'overflow-y-auto'}`} style={messages.length === 0 ? { scrollbarGutter: 'auto' } : { scrollbarGutter: 'stable' }}>
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center px-8">
+            <WelcomeCards />
+          </div>
+        ) : (
           <div className="py-2">
             {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
             {showFileSelector && <FileSelector />}
@@ -41,15 +44,13 @@ export const ChatView: React.FC = () => {
   )
 }
 
-const WelcomeScreen: React.FC = () => {
-  const agents = agentRegistry.getAll()
+const WelcomeCards: React.FC = () => {
+  const agents = useSidebarStore((s) => s.agents)
   const leader = agents.find((a) => a.id === 'leader')
   const otherAgents = agents.filter((a) => a.id !== 'leader')
 
   return (
-    <div className="flex flex-col items-center justify-center h-full px-8 py-12">
-      <p className="text-black/80 text-sm mb-6 text-center">选择文件夹，使用 AI Agent 分析内容<br />或输入关键字搜索文件</p>
-
+    <>
       {leader && (
         <button
           onClick={() => {
@@ -80,7 +81,8 @@ const WelcomeScreen: React.FC = () => {
               useChatStore.getState().setActiveAgent(agent.id)
               useChatStore.getState().setInputValue('')
             }}
-            className="card-brutal p-4 text-left cursor-pointer">
+            className="card-brutal p-4 text-left cursor-pointer"
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-none border-2 border-brutal-black flex items-center justify-center flex-shrink-0" style={{ backgroundColor: agent.color }}>
                 {React.createElement(agent.icon, { size: 20, color: '#141111' })}
@@ -93,6 +95,6 @@ const WelcomeScreen: React.FC = () => {
           </button>
         ))}
       </div>
-    </div>
+    </>
   )
 }

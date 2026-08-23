@@ -16,6 +16,7 @@ export const PROVIDERS: ProviderConfig[] = [
   { id: 'zhipu', name: '智谱 (GLM)', color: '#3859FF', hasKey: false },
   { id: 'qwen', name: '通义千问', color: '#6B4EF7', hasKey: false },
   { id: 'moonshot', name: 'Moonshot', color: '#161823', hasKey: false },
+  { id: 'xiaomi', name: '小米 MIMO', color: '#FF6700', hasKey: false },
 ]
 
 export const DEFAULT_MODELS: Record<string, string> = {
@@ -26,6 +27,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   zhipu: 'glm-4-flash',
   qwen: 'qwen-plus',
   moonshot: 'moonshot-v1-8k',
+  xiaomi: 'mimo-v2.5-pro',
 }
 
 interface AgentModelConfig {

@@ -24,6 +24,7 @@ const PROVIDER_CONFIGS: Record<string, { baseURL: string; defaultModel: string }
   zhipu: { baseURL: 'https://open.bigmodel.cn/api/paas/v4', defaultModel: 'glm-4-flash' },
   qwen: { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-plus' },
   moonshot: { baseURL: 'https://api.moonshot.cn/v1', defaultModel: 'moonshot-v1-8k' },
+  xiaomi: { baseURL: 'https://api.xiaomimimo.com/v1', defaultModel: 'mimo-v2.5-pro' },
 }
 
 async function resolveApiKey(opts: LLMOptions): Promise<string> {
@@ -114,9 +115,15 @@ export async function callLLMStream(
 }
 
 async function callOpenAICompatible(baseURL: string, apiKey: string, model: string, opts: LLMOptions): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (opts.provider === 'xiaomi') {
+    headers['api-key'] = apiKey
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`
+  }
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers,
     body: JSON.stringify({ model, messages: opts.messages, max_tokens: 4096, temperature: 0.7 }),
     signal: opts.signal,
   })
@@ -132,9 +139,15 @@ async function callOpenAICompatibleStream(
   baseURL: string, apiKey: string, model: string, opts: LLMOptions,
   onToken: (token: string) => void,
 ): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (opts.provider === 'xiaomi') {
+    headers['api-key'] = apiKey
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`
+  }
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers,
     body: JSON.stringify({ model, messages: opts.messages, max_tokens: 4096, temperature: 0.7, stream: true }),
     signal: opts.signal,
   })

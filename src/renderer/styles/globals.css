@@ -24,14 +24,28 @@
   }
 
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
     background: #FFFAEF;
   }
   ::-webkit-scrollbar-thumb {
     background: #141111;
+  }
+
+  html, body {
+    scrollbar-gutter: auto;
+  }
+
+  .sidebar-scroll {
+    overflow-y: scroll;
+    background-color: #FFFAEF;
+    min-width: 0;
+  }
+  .sidebar-scroll > .section-block {
+    width: calc(100% + 5px);
+    box-sizing: border-box;
   }
 }
 
