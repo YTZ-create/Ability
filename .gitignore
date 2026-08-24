@@ -35,3 +35,9 @@ test-electron/
 
 # Slark
 .slark/
+
+# Project planning notes (kept local, not published)
+CAPABILITY_EXPANSION_PLAN.md
+PENDING_ITEMS.md
+PENDING_UPDATE.md
+UPDATE_ORDER.md
