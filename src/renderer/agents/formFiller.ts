@@ -1,7 +1,7 @@
 import { BaseAgent, type AgentConfig } from './base'
 import type { PlatformAPI } from '../api/platformAPI'
 import { FileOutput } from 'lucide-react'
-import { callLLM } from '../utils/llm'
+import { callLLM, resolveProvider } from '../utils/llm'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTokenUsageStore } from '../stores/tokenUsageStore'
 import type { AnalysisStep } from '../stores/chatStore'
@@ -66,7 +66,7 @@ export class FormFillerAgent extends BaseAgent {
     description: '分析文档中的信息采集项，对话式帮你填写文档',
     icon: FileOutput,
     color: '#F472B6',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Ethan，信息采集与文档填写专家。你擅长从文档中识别需要填写的信息项，然后以对话的方式逐个收集信息并填入文档。
 
@@ -266,10 +266,11 @@ ${locationsDescription}
     const settingsStore = useSettingsStore.getState()
     const tokenUsageStore = useTokenUsageStore.getState()
     const userConfig = settingsStore.getAgentModel(this.config.id)
-    const provider = userConfig?.provider || this.config.provider
+    const rawProvider = userConfig?.provider || this.config.provider
     const model = userConfig?.model || this.config.model || ''
 
-    const onTokenUsage = (promptTokens: number, completionTokens: number) => {
+    const onTokenUsage = async (promptTokens: number, completionTokens: number) => {
+      const provider = await resolveProvider(rawProvider)
       tokenUsageStore.addRecord({
         provider,
         model: model || 'default',
@@ -281,7 +282,7 @@ ${locationsDescription}
     }
 
     const result = await callLLM({
-      provider,
+      provider: rawProvider,
       model,
       messages: [
         { role: 'system', content: '你是一个信息提取专家，只返回 JSON。' },
@@ -490,10 +491,11 @@ ${locationsDescription}
     const settingsStore = useSettingsStore.getState()
     const tokenUsageStore = useTokenUsageStore.getState()
     const userConfig = settingsStore.getAgentModel(this.config.id)
-    const provider = userConfig?.provider || this.config.provider
+    const rawProvider = userConfig?.provider || this.config.provider
     const model = userConfig?.model || this.config.model || ''
 
-    const onTokenUsage = (promptTokens: number, completionTokens: number) => {
+    const onTokenUsage = async (promptTokens: number, completionTokens: number) => {
+      const provider = await resolveProvider(rawProvider)
       tokenUsageStore.addRecord({
         provider,
         model: model || 'default',
@@ -788,10 +790,11 @@ ${context}
     const settingsStore = useSettingsStore.getState()
     const tokenUsageStore = useTokenUsageStore.getState()
     const userConfig = settingsStore.getAgentModel(this.config.id)
-    const provider = userConfig?.provider || this.config.provider
+    const rawProvider = userConfig?.provider || this.config.provider
     const model = userConfig?.model || this.config.model || ''
 
-    const onTokenUsage = (promptTokens: number, completionTokens: number) => {
+    const onTokenUsage = async (promptTokens: number, completionTokens: number) => {
+      const provider = await resolveProvider(rawProvider)
       tokenUsageStore.addRecord({
         provider,
         model: model || 'default',
@@ -818,7 +821,7 @@ ${JSON.stringify(fieldsJson, null, 2)}
 3. 只返回填写完成的文档内容，不要其他文字`
 
     return await callLLM({
-      provider,
+      provider: rawProvider,
       model,
       messages: [
         { role: 'system', content: '你是一个文档填写助手，将字段值填入文档对应位置。只返回填写后的文档内容。' },

@@ -11,7 +11,7 @@ export class BrowserAgent extends BaseAgent {
     description: '浏览器控制专家：AI 驱动的网页自动化、表单填写、数据抓取',
     icon: Globe,
     color: '#06B6D4',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Alice，浏览器控制专家。你专注于 AI 驱动的网页自动化操作、表单填写、数据抓取和信息提取。
 

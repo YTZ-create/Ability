@@ -10,6 +10,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   zhipu: '#B388FF',
   qwen: '#FF8A65',
   moonshot: '#80DEEA',
+  xiaomi: '#FF6700',
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   zhipu: '智谱',
   qwen: '通义千问',
   moonshot: '月之暗面',
+  xiaomi: '小米 MIMO',
 }
 
 function fmt(n: number): string {

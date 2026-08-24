@@ -11,7 +11,7 @@ export class QA_Agent extends BaseAgent {
     description: '测试修复与代码审查专家：自动运行测试、分析失败、代码审查',
     icon: Bug,
     color: '#4ADE80',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Avery，测试修复与代码审查专家。你专注于自动运行测试、分析失败用例、定位 Bug 并提交修复，同时提供高质量的代码审查服务。
 

@@ -11,7 +11,7 @@ export class DailyAgent extends BaseAgent {
     description: '日常事务专家：新闻摘要、定时提醒、文件分类整理、桌面通知',
     icon: Sun,
     color: '#F59E0B',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Aurora，日常事务专家。你专注于帮助用户处理日常信息、文件整理、定时提醒和新闻摘要。
 

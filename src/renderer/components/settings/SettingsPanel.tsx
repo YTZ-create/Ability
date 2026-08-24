@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { X, Eye, EyeOff, Key, Check, Cpu } from 'lucide-react'
-import { useSettingsStore, PROVIDERS, DEFAULT_MODELS } from '../../stores/settingsStore'
+import { useSettingsStore, PROVIDERS, DEFAULT_MODELS, PROVIDER_MODELS } from '../../stores/settingsStore'
 import { agentRegistry } from '../../agents/registry'
 import { Button } from '../ui/Button'
 import { getPlatform } from '../../api/neutralino'
 
 export const SettingsPanel: React.FC = () => {
-  const { showSettings, setShowSettings, providers, setProviderKey, refreshProviderKeys, agentModels, setAgentModel, loadAgentModels } = useSettingsStore()
+  const { showSettings, setShowSettings, providers, setProviderKey, refreshProviderKeys, agentModels, setAgentModel, resetAllAgentsToAuto, loadAgentModels } = useSettingsStore()
   const [keys, setKeys] = useState<Record<string, string>>({})
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [saved, setSaved] = useState<Record<string, boolean>>({})
@@ -33,6 +33,8 @@ export const SettingsPanel: React.FC = () => {
     if (platform) {
       await platform.storage.setApiKey(providerId, keys[providerId] || '')
       setProviderKey(providerId, !!keys[providerId])
+      // 保存 API Key 后，自动重置所有 Agent 为 auto 模式，让 resolveProvider 自动检测有 Key 的 provider
+      resetAllAgentsToAuto()
       setSaved((prev) => ({ ...prev, [providerId]: true }))
       setTimeout(() => setSaved((prev) => ({ ...prev, [providerId]: false })), 2000)
     }
@@ -112,8 +114,38 @@ export const SettingsPanel: React.FC = () => {
             <div className="p-5 space-y-3">
               {allAgents.map((agent) => {
                 const cfg = currentModel(agent.id)
-                const provider = cfg?.provider || agent.provider
-                const model = cfg?.model || agent.model || DEFAULT_MODELS[agent.provider] || ''
+                // 只允许选择已配置 API Key 的厂商
+                const availableProviders = providers.filter((p) => p.hasKey)
+                const rawProvider = cfg?.provider || agent.provider
+                // 若当前选中的厂商没有 Key（例如 Key 被删除），回退到自动选择
+                const provider = rawProvider === 'auto' || availableProviders.some((p) => p.id === rawProvider)
+                  ? rawProvider
+                  : 'auto'
+                // 当只有一个有 Key 的厂商时，统一显示那个厂商，不显示 auto
+                const displayProvider = availableProviders.length === 1 && provider === 'auto'
+                  ? availableProviders[0].id
+                  : provider
+                const model = cfg?.model || agent.model || DEFAULT_MODELS[displayProvider] || ''
+
+                // 根据选中的 provider 获取可用模型列表
+                const getAvailableModels = () => {
+                  if (displayProvider === 'auto') {
+                    // auto 模式：显示所有有 Key 的 provider 的模型
+                    const models: string[] = []
+                    availableProviders.forEach(p => {
+                      const providerModels = PROVIDER_MODELS[p.id] || []
+                      providerModels.forEach(m => models.push(`${p.name} - ${m}`))
+                    })
+                    return models
+                  }
+                  // 指定 provider：显示该 provider 的模型
+                  const providerName = PROVIDERS.find(p => p.id === displayProvider)?.name || displayProvider
+                  return (PROVIDER_MODELS[displayProvider] || []).map(m => `${providerName} - ${m}`)
+                }
+
+                const availableModels = getAvailableModels()
+                const displayModel = model ? `${PROVIDERS.find(p => p.id === displayProvider)?.name || displayProvider} - ${model}` : ''
+
                 return (
                   <div key={agent.id} className="border-2 border-brutal-black shadow-brutal-sm bg-white">
                     <div className="flex items-center gap-2 px-3 py-2 border-b-2 border-brutal-black" style={{ backgroundColor: agent.color }}>
@@ -122,20 +154,32 @@ export const SettingsPanel: React.FC = () => {
                     </div>
                     <div className="p-3 flex items-center gap-2">
                       <select
-                        value={provider}
-                        onChange={(e) => setAgentModel(agent.id, e.target.value, model)}
+                        value={displayProvider}
+                        onChange={(e) => setAgentModel(agent.id, e.target.value, '')}
                         className="input-brutal flex-1 text-xs"
                       >
-                        {PROVIDERS.map((p) => (
+                        {availableProviders.length > 1 && (
+                          <option value="auto">自动选择（推荐）</option>
+                        )}
+                        {availableProviders.map((p) => (
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>
-                      <input
-                        value={model}
-                        onChange={(e) => setAgentModel(agent.id, provider, e.target.value)}
-                        placeholder="模型名称（留空用默认）"
+                      <select
+                        value={displayModel}
+                        onChange={(e) => {
+                          // 从 "厂商名 - 模型名" 格式中提取模型名
+                          const selectedValue = e.target.value
+                          const modelOnly = selectedValue.includes(' - ') ? selectedValue.split(' - ')[1] : selectedValue
+                          setAgentModel(agent.id, provider, modelOnly)
+                        }}
                         className="input-brutal flex-1 text-xs"
-                      />
+                      >
+                        <option value="">使用默认模型</option>
+                        {availableModels.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 )

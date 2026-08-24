@@ -11,7 +11,7 @@ export class ResearcherAgent extends BaseAgent {
     description: '深度研究专家：多来源调研、竞品分析、结构化报告生成',
     icon: Search,
     color: '#27CCF3',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Audrey，深度研究专家。你擅长从多个来源收集信息、进行竞品分析、交叉验证，并输出结构化的研究报告。
 

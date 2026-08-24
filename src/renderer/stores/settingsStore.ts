@@ -20,14 +20,26 @@ export const PROVIDERS: ProviderConfig[] = [
 ]
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o',
-  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-5.4',
+  anthropic: 'claude-sonnet-5',
   google: 'gemini-2.5-flash',
-  deepseek: 'deepseek-chat',
-  zhipu: 'glm-4-flash',
+  deepseek: 'deepseek-v4-flash',
+  zhipu: 'glm-4.7',
   qwen: 'qwen-plus',
-  moonshot: 'moonshot-v1-8k',
+  moonshot: 'kimi-k3',
   xiaomi: 'mimo-v2.5-pro',
+}
+
+/** 每个 provider 的可用模型列表（可扩展） */
+export const PROVIDER_MODELS: Record<string, string[]> = {
+  openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5', 'gpt-5-mini'],
+  anthropic: ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5', 'claude-haiku-4-5'],
+  google: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  zhipu: ['glm-4.7', 'glm-4.5-air', 'glm-4-flash', 'glm-4-flash-250414'],
+  qwen: ['qwen-max', 'qwen-plus', 'qwen-flash', 'qwen-turbo'],
+  moonshot: ['kimi-k3', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed'],
+  xiaomi: ['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro', 'mimo-v2-omni', 'mimo-v2-flash'],
 }
 
 interface AgentModelConfig {
@@ -45,6 +57,8 @@ interface SettingsState {
   /** Per-Agent 模型配置 */
   agentModels: AgentModelConfig[]
   setAgentModel: (agentId: string, provider: string, model: string) => void
+  /** 把所有 Agent 重置为 auto，让 resolveProvider 自动检测有 Key 的 provider */
+  resetAllAgentsToAuto: () => void
   getAgentModel: (agentId: string) => { provider: string; model: string } | null
   loadAgentModels: () => Promise<void>
 }
@@ -72,6 +86,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       try { api.settings.setData('agent_models', JSON.stringify(updated)) } catch { /* skip */ }
       return { agentModels: updated }
     }),
+  resetAllAgentsToAuto: () => {
+    set((s) => {
+      const updated = s.agentModels.map((m) => ({ ...m, provider: 'auto', model: '' }))
+      try { api.settings.setData('agent_models', JSON.stringify(updated)) } catch { /* skip */ }
+      return { agentModels: updated }
+    })
+  },
   getAgentModel: (agentId) => {
     const found = get().agentModels.find((m) => m.agentId === agentId)
     return found ? { provider: found.provider, model: found.model } : null

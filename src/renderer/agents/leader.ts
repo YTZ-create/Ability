@@ -4,7 +4,7 @@ import { agentRegistry } from './registry'
 import type { PlatformAPI } from '../api/platformAPI'
 import type { MemoryStore } from '../memory/memoryStore'
 import { Sparkles } from 'lucide-react'
-import { callLLM } from '../utils/llm'
+import { callLLM, resolveProvider } from '../utils/llm'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { START_REPLIES, END_REPLIES, randomPick } from '../utils/replies'
@@ -23,7 +23,7 @@ export class LeaderAgent extends BaseAgent {
     description: '理解你的问题，自动分配给最合适的 Agent 处理',
     icon: Sparkles,
     color: '#FFD440',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Oliver，智能任务调度助手。
 

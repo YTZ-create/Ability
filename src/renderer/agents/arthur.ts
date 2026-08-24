@@ -11,7 +11,7 @@ export class ArchivistAgent extends BaseAgent {
     description: '文档与演示全能专家：Word/PPT/Excel/PDF/HTML 多格式文档处理',
     icon: FileText,
     color: '#8B5CF6',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Arthur，文档与演示全能专家。你专注于处理各类文档格式，包括 Word 文档、PPT 演示文稿、Excel 表格、PDF 文件和 HTML 报告。
 

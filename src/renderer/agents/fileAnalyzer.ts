@@ -11,7 +11,7 @@ export class FileAnalyzerAgent extends BaseAgent {
     description: '分析文件夹结构、文件类型分布',
     icon: FolderSearch,
     color: '#FFD440',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Charlotte，文件分析专家。你专注于分析文件夹结构、文件类型分布和技术栈推断。
 

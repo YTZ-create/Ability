@@ -2,9 +2,35 @@
 
 基于多 Agent 协作的桌面 AI 助手，集成 11 个专业 Agent，支持智能表单填写、文件夹分析、代码审查、架构设计、深度研究、文档与演示生成、跨会话记忆、定时任务、多模型切换及网页自动化等能力。
 
-> **当前版本：v3.0.0**
+> **当前版本：v3.0.1**
 
 ## 版本历史
+
+### 3.0.1（2026-08-24）
+
+#### MiMo 思考模式修复
+
+- 小米 MiMo `mimo-v2.5-pro` 默认开启 thinking 模式导致界面卡住无字，现已显式关闭
+- 新增 `buildRequestBody` 按厂商构建请求体，集中管理特殊参数
+- 全局请求超时 60 秒 + 中断时重试立即停止
+
+#### Agent 模型设置页优化
+
+- 只显示已配置 API Key 的厂商，避免误选未配置的厂商
+- 模型选择改为下拉框，按 provider 动态列出可用模型
+- 仅 1 个厂商有 Key 时隐藏"自动选择"，所有 Agent 统一指向该厂商
+
+#### 各厂商模型与默认值更新
+
+- 所有厂商模型列表同步 2026 年 8 月官网最新型号
+- OpenAI `gpt-5.4`、Anthropic `claude-sonnet-5`、Google `gemini-2.5-pro`、DeepSeek `deepseek-v4-flash`、智谱 `glm-4.7`、通义 `qwen-max`、Moonshot `kimi-k3`、小米 `mimo-v2.5-pro`
+- 移除已停用的旧型号（DeepSeek v3、Moonshot-v1、Gemini 1.5-pro、Claude Opus 4 等）
+- 修复 Kimi 因传 `temperature` 参数导致的 `invalid_request_error`
+
+#### Provider 自动检测
+
+- 所有 Agent `provider` 改为 `auto`，运行时代码自动检测有 Key 的厂商
+- 残留无 Key 的配置时自动兜底切换，不会出现"未配置"报错
 
 ### 3.0.0（2026-08-23）
 

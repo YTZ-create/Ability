@@ -1,4 +1,4 @@
-import { callLLM, callLLMStream } from '../utils/llm'
+import { callLLM, callLLMStream, resolveProvider } from '../utils/llm'
 import type { FolderProject } from '../stores/folderStore'
 import type { LucideIcon } from 'lucide-react'
 import type { PlatformAPI } from '../api/platformAPI'
@@ -70,10 +70,9 @@ export abstract class BaseAgent {
       const tokenUsageStore = useTokenUsageStore.getState()
       const settingsStore = useSettingsStore.getState()
 
-      // 优先使用用户在设置中配置的模型，否则使用 Agent 默认配置
       const userConfig = settingsStore.getAgentModel(this.config.id)
-      const provider = userConfig?.provider || this.config.provider
-      const model = userConfig?.model || this.config.model || ''
+      const provider = await resolveProvider(userConfig?.provider || this.config.provider)
+      const model = userConfig?.model || ''
 
       const onTokenUsage = (promptTokens: number, completionTokens: number) => {
         tokenUsageStore.addRecord({

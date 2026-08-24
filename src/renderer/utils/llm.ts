@@ -17,14 +17,50 @@ interface LLMOptions {
 }
 
 const PROVIDER_CONFIGS: Record<string, { baseURL: string; defaultModel: string }> = {
-  openai: { baseURL: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' },
-  anthropic: { baseURL: 'https://api.anthropic.com/v1', defaultModel: 'claude-sonnet-4-6' },
+  openai: { baseURL: 'https://api.openai.com/v1', defaultModel: 'gpt-5.4' },
+  anthropic: { baseURL: 'https://api.anthropic.com/v1', defaultModel: 'claude-sonnet-5' },
   google: { baseURL: 'https://generativelanguage.googleapis.com/v1beta', defaultModel: 'gemini-2.5-flash' },
-  deepseek: { baseURL: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat' },
-  zhipu: { baseURL: 'https://open.bigmodel.cn/api/paas/v4', defaultModel: 'glm-4-flash' },
+  deepseek: { baseURL: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-v4-flash' },
+  zhipu: { baseURL: 'https://open.bigmodel.cn/api/paas/v4', defaultModel: 'glm-4.7' },
   qwen: { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-plus' },
-  moonshot: { baseURL: 'https://api.moonshot.cn/v1', defaultModel: 'moonshot-v1-8k' },
+  moonshot: { baseURL: 'https://api.moonshot.cn/v1', defaultModel: 'kimi-k3' },
   xiaomi: { baseURL: 'https://api.xiaomimimo.com/v1', defaultModel: 'mimo-v2.5-pro' },
+}
+
+export async function resolveProvider(provider: string): Promise<string> {
+  const tryDetect = async (): Promise<string> => {
+    for (const p of Object.keys(PROVIDER_CONFIGS)) {
+      if (p === 'anthropic' || p === 'google') continue
+      const key = await api.settings.getApiKey(p)
+      if (key && key.trim() !== '') {
+        console.log(`[LLM] 自动选择 provider: ${p}`)
+        return p
+      }
+    }
+    for (const p of ['anthropic', 'google']) {
+      const key = await api.settings.getApiKey(p)
+      if (key && key.trim() !== '') {
+        console.log(`[LLM] 自动选择 provider: ${p}`)
+        return p
+      }
+    }
+    return 'deepseek'
+  }
+
+  if (provider === 'auto') {
+    return await tryDetect()
+  }
+  if (!PROVIDER_CONFIGS[provider]) {
+    console.warn(`[LLM] 未知 provider "${provider}"，自动检测`)
+    return await tryDetect()
+  }
+
+  const key = await api.settings.getApiKey(provider)
+  if (key && key.trim() !== '') {
+    return provider
+  }
+  console.warn(`[LLM] ${provider} 未配置 API Key，尝试自动检测其他已配置的 provider`)
+  return await tryDetect()
 }
 
 async function resolveApiKey(opts: LLMOptions): Promise<string> {
@@ -42,6 +78,52 @@ async function resolveApiKey(opts: LLMOptions): Promise<string> {
 
 const MAX_RETRIES = 2
 const RETRY_DELAY_MS = 1500
+const FETCH_TIMEOUT_MS = 60000
+
+/** 构建 OpenAI 兼容请求体。不同厂商的采样参数和思考模式控制各不相同，这里按 provider 差异化处理。 */
+function buildRequestBody(provider: string, model: string, messages: LLMMessage[], stream: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    max_tokens: 4096,
+    temperature: 0.7,
+    stream,
+  }
+
+  if (provider === 'xiaomi') {
+    // mimo-v2.5-pro 默认 thinking=enabled，关闭后模型直接输出 content，避免界面长时间只显示"思考中"
+    body.thinking = { type: 'disabled' }
+  } else if (provider === 'zhipu') {
+    // GLM 系列默认 thinking=enabled，和 MiMo 一样会先输出大量 reasoning_content，这里显式关闭
+    body.thinking = { type: 'disabled' }
+  } else if (provider === 'moonshot') {
+    // Kimi 系列 temperature 为固定值（kimi-k3 / kimi-k2.7 / kimi-k2.6 均为 1.0），
+    // 传 0.7 会直接返回 invalid_request_error，故不显式传 temperature
+    delete body.temperature
+    // kimi-k2.7-code 是始终思考模型，只接受 thinking: enabled + keep: all，不要传 disabled
+    // kimi-k3 用 reasoning_effort 控制，不支持 thinking 参数，也跳过
+    if (/^kimi-k2\.6/.test(model)) {
+      // k2.6 默认 thinking=enabled，为避免长时间只显示思考内容，显式关闭
+      body.thinking = { type: 'disabled' }
+    }
+  }
+
+  return body
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  const existingSignal = options.signal
+  const mergedSignals = existingSignal
+    ? AbortSignal.any([controller.signal, existingSignal])
+    : controller.signal
+  try {
+    return await fetch(url, { ...options, signal: mergedSignals })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
 
 /** 判断错误是否值得重试（网络/超时/服务端错误可重试，认证/参数错误不重试） */
 function isRetryableError(err: any): boolean {
@@ -58,60 +140,59 @@ function isRetryableError(err: any): boolean {
 async function withRetry<T>(fn: () => Promise<T>, label: string, signal?: AbortSignal): Promise<T> {
   let lastErr: any
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (signal?.aborted) throw new Error('Request aborted')
     try {
       return await fn()
     } catch (err: any) {
       lastErr = err
-      if (signal?.aborted) {
-        throw new Error('Request aborted')
-      }
-      // 不可恢复的错误直接抛出，不浪费时间重试
+      if (signal?.aborted) throw new Error('Request aborted')
       if (!isRetryableError(err)) {
         console.error(`[LLM] ${label} 不可恢复的错误，不重试:`, err?.message || err)
         throw err
       }
-      if (attempt < MAX_RETRIES) {
-        console.warn(`[LLM] ${label} 第 ${attempt + 1} 次失败，${RETRY_DELAY_MS}ms 后重试:`, err?.message || err)
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
-      }
+      if (attempt >= MAX_RETRIES) break
+      console.warn(`[LLM] ${label} 第 ${attempt + 1} 次失败，${RETRY_DELAY_MS}ms 后重试:`, err?.message || err)
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
     }
   }
   throw lastErr
 }
 
 export async function callLLM(opts: LLMOptions): Promise<string> {
-  const apiKey = await resolveApiKey(opts)
-  if (!apiKey) throw new Error(`未配置 ${opts.provider} 的 API Key，请在设置中填写。`)
+  const resolvedProvider = await resolveProvider(opts.provider)
+  const apiKey = await resolveApiKey({ ...opts, provider: resolvedProvider })
+  if (!apiKey) throw new Error(`未配置 ${resolvedProvider} 的 API Key，请在设置中填写。`)
 
-  const config = PROVIDER_CONFIGS[opts.provider]
-  if (!config) throw new Error(`不支持的模型厂商: ${opts.provider}`)
+  const config = PROVIDER_CONFIGS[resolvedProvider]
+  if (!config) throw new Error(`不支持的模型厂商: ${resolvedProvider}`)
 
   const model = opts.model || config.defaultModel
 
   return withRetry(() => {
-    if (opts.provider === 'anthropic') return callAnthropic(apiKey, model, opts)
-    if (opts.provider === 'google') return callGoogle(apiKey, model, opts)
-    return callOpenAICompatible(config.baseURL, apiKey, model, opts)
-  }, `callLLM(${opts.provider}/${model})`, opts.signal)
+    if (resolvedProvider === 'anthropic') return callAnthropic(apiKey, model, opts)
+    if (resolvedProvider === 'google') return callGoogle(apiKey, model, opts)
+    return callOpenAICompatible(config.baseURL, apiKey, model, { ...opts, provider: resolvedProvider })
+  }, `callLLM(${resolvedProvider}/${model})`, opts.signal)
 }
 
 export async function callLLMStream(
   opts: LLMOptions,
   onToken: (token: string) => void,
 ): Promise<string> {
-  const apiKey = await resolveApiKey(opts)
-  if (!apiKey) throw new Error(`未配置 ${opts.provider} 的 API Key，请在设置中填写。`)
+  const resolvedProvider = await resolveProvider(opts.provider)
+  const apiKey = await resolveApiKey({ ...opts, provider: resolvedProvider })
+  if (!apiKey) throw new Error(`未配置 ${resolvedProvider} 的 API Key，请在设置中填写。`)
 
-  const config = PROVIDER_CONFIGS[opts.provider]
-  if (!config) throw new Error(`不支持的模型厂商: ${opts.provider}`)
+  const config = PROVIDER_CONFIGS[resolvedProvider]
+  if (!config) throw new Error(`不支持的模型厂商: ${resolvedProvider}`)
 
   const model = opts.model || config.defaultModel
 
   return withRetry(() => {
-    if (opts.provider === 'anthropic') return callAnthropicStream(apiKey, model, opts, onToken)
-    if (opts.provider === 'google') return callGoogleStream(apiKey, model, opts, onToken)
-    return callOpenAICompatibleStream(config.baseURL, apiKey, model, opts, onToken)
-  }, `callLLMStream(${opts.provider}/${model})`, opts.signal)
+    if (resolvedProvider === 'anthropic') return callAnthropicStream(apiKey, model, opts, onToken)
+    if (resolvedProvider === 'google') return callGoogleStream(apiKey, model, opts, onToken)
+    return callOpenAICompatibleStream(config.baseURL, apiKey, model, { ...opts, provider: resolvedProvider }, onToken)
+  }, `callLLMStream(${resolvedProvider}/${model})`, opts.signal)
 }
 
 async function callOpenAICompatible(baseURL: string, apiKey: string, model: string, opts: LLMOptions): Promise<string> {
@@ -121,10 +202,10 @@ async function callOpenAICompatible(baseURL: string, apiKey: string, model: stri
   } else {
     headers['Authorization'] = `Bearer ${apiKey}`
   }
-  const res = await fetch(`${baseURL}/chat/completions`, {
+  const res = await fetchWithTimeout(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages: opts.messages, max_tokens: 4096, temperature: 0.7 }),
+    body: JSON.stringify(buildRequestBody(opts.provider, model, opts.messages, false)),
     signal: opts.signal,
   })
   if (!res.ok) { const err = await res.text(); throw new Error(`API 调用失败 (${res.status}): ${err}`) }
@@ -145,10 +226,10 @@ async function callOpenAICompatibleStream(
   } else {
     headers['Authorization'] = `Bearer ${apiKey}`
   }
-  const res = await fetch(`${baseURL}/chat/completions`, {
+  const res = await fetchWithTimeout(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages: opts.messages, max_tokens: 4096, temperature: 0.7, stream: true }),
+    body: JSON.stringify(buildRequestBody(opts.provider, model, opts.messages, true)),
     signal: opts.signal,
   })
   if (!res.ok) { const err = await res.text(); throw new Error(`API 调用失败 (${res.status}): ${err}`) }

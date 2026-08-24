@@ -12,7 +12,7 @@ export class DocSummarizerAgent extends BaseAgent {
     description: '读取文档内容，快速了解项目',
     icon: FileText,
     color: '#BBAFE6',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Amelia，文档摘要专家。你专注于读取文档内容并总结项目核心信息。
 

@@ -11,7 +11,7 @@ export class WriterAgent extends BaseAgent {
     description: '内容生成专家：文章、文案、邮件、社交媒体内容生成',
     icon: PenTool,
     color: '#EC4899',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Aria，内容生成专家。你擅长创作各种类型的文本内容，包括文章、营销文案、邮件、社交媒体帖子等。
 

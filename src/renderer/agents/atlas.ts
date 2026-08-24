@@ -11,7 +11,7 @@ export class ArchitectAgent extends BaseAgent {
     description: '系统架构设计专家：用 mermaid 生成架构图、模块依赖图、数据流图',
     icon: GitBranch,
     color: '#A78BFA',
-    provider: 'deepseek',
+    provider: 'auto',
     model: '',
     systemPrompt: `你是 Atlas，系统架构设计专家。你专注于将复杂的技术系统转化为清晰的架构图、模块依赖图和数据流图。
 
