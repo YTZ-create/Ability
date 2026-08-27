@@ -8,6 +8,7 @@ const CATEGORY_LABEL: Record<PluginInfo['category'], string> = {
   seedance: '视频',
   browser: '浏览器',
   skill: 'Skill',
+  office: '办公',
 }
 
 export const PluginPanel: React.FC = () => {
@@ -25,7 +26,7 @@ export const PluginPanel: React.FC = () => {
           <Puzzle size={12} /> 插件管理 <span className="ml-auto text-[10px] text-black/50 font-mono">{enabledCount}/{plugins.length} 已启用</span>
         </div>
         <div className="flex flex-wrap gap-1">
-          {(['all', 'lark', 'seedream', 'seedance', 'browser', 'skill'] as const).map((c) => (
+          {(['all', 'lark', 'seedream', 'seedance', 'browser', 'skill', 'office'] as const).map((c) => (
             <button key={c} onClick={() => setFilter(c)}
               className={`text-[10px] font-mono border-2 border-brutal-black px-2 py-0.5 transition-all duration-150 ${filter === c ? 'bg-brutal-yellow shadow-brutal-sm' : 'bg-white hover:bg-brutal-cream'}`}>
               {c === 'all' ? '全部' : CATEGORY_LABEL[c]}

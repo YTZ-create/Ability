@@ -6,7 +6,7 @@ export interface PluginInfo {
   version: string
   description: string
   enabled: boolean
-  category: 'lark' | 'seedream' | 'seedance' | 'browser' | 'skill'
+  category: 'lark' | 'seedream' | 'seedance' | 'browser' | 'skill' | 'office'
 }
 
 interface PluginState {
@@ -22,6 +22,7 @@ export const usePluginStore = create<PluginState>((set) => ({
     { id: 'browser', name: '浏览器控制', version: '0.1.0', description: 'Alice 使用的网页自动化能力', enabled: true, category: 'browser' },
     { id: 'diagram-design', name: 'diagram-design Skill', version: '0.1.0', description: '27 种编辑级图表视觉类型', enabled: false, category: 'skill' },
     { id: 'open-code-review', name: 'Open Code Review', version: '0.1.0', description: 'Avery 行级精度代码审查 CLI', enabled: false, category: 'skill' },
+    { id: 'univer-office', name: '办公文档 (Univer)', version: '0.1.0', description: 'Univer 电子表格编辑与预览', enabled: false, category: 'office' },
   ],
   toggle: (id) => set((s) => ({ plugins: s.plugins.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p)) })),
 }))
