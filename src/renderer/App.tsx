@@ -8,6 +8,7 @@ import { SettingsPanel } from './components/settings/SettingsPanel'
 import { AgentConversation } from './components/detail/AgentConversation'
 import { MemoryViewer } from './components/memory/MemoryViewer'
 import { CapabilitiesHub } from './components/capabilities/CapabilitiesHub'
+import { OfficeDrawer } from './components/office/OfficeDrawer'
 import { useChatStore } from './stores/chatStore'
 import { useFormFillStore } from './stores/formFillStore'
 import { useFolderStore } from './stores/folderStore'
@@ -77,6 +78,8 @@ const App: React.FC = () => {
             <ChatView />
           </div>
         </div>
+
+        <OfficeDrawer />
 
         {showDetail && (
           <div className="w-72 flex-shrink-0 border-l-2 border-brutal-black bg-white flex flex-col">

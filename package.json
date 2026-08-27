@@ -1,6 +1,6 @@
 {
   "name": "ai-agent-app",
-  "version": "1.0.0",
+  "version": "3.0.2",
   "description": "AI Agent desktop app — analyze folders with multi-model AI agents",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@univerjs/preset-sheets-core": "^0.25.1",
+    "@univerjs/presets": "^0.25.1",
     "docx": "^9.7.1",
     "lucide-react": "^0.370.0",
     "pdf-lib": "^1.17.1",
@@ -21,6 +23,7 @@
     "react-dom": "^18.2.0",
     "react-markdown": "^9.0.0",
     "remark-gfm": "^4.0.1",
+    "rxjs": "^7.8.2",
     "xlsx": "^0.18.5",
     "zustand": "^4.5.0"
   },

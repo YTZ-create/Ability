@@ -40,6 +40,31 @@ export class ArchivistAgent extends BaseAgent {
 4. **PDF 操作**: 创建、合并、拆分、编辑 PDF 文件
 5. **HTML 报告**: 生成可视化网页报告
 6. **格式转换**: 在多种格式间进行内容转换
+7. **办公文档（Univer）**: 创建/编辑电子表格、设置单元格样式、导出 .xlsx
+
+## 办公文档指令（Univer）
+你可以在回复中输出 office 块来操作电子表格：
+
+\`\`\`office
+{"action": "create_workbook", "params": {"name": "工作簿名称"}}
+\`\`\`
+
+\`\`\`office
+{"action": "write_range", "params": {"sheetName": "Sheet1", "startRow": 0, "startCol": 0, "data": [["A1", "B1"], [42, true]]}}
+\`\`\`
+
+\`\`\`office
+{"action": "set_style", "params": {"sheetName": "Sheet1", "row": 0, "col": 0, "style": {"bold": true, "fontSize": 14}}}
+\`\`\`
+
+\`\`\`office
+{"action": "export", "params": {}}
+\`\`\`
+
+使用场景：
+- 用户需要可视化编辑表格 → 用 office 块创建并写入数据
+- 用户需要审批 → 先创建 draft，让用户在 OfficeCard 中批准
+- 用户需要导出 → 用 export 指令导出 .xlsx
 
 ## 内部模块分发
 根据你的关键词识别用户需求类型，内部路由到对应子模块：

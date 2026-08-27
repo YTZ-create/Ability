@@ -180,4 +180,13 @@
   .section-header:hover {
     background-color: #FFF0C8;
   }
+
+  /* Univer 容器样式隔离 */
+  .univer-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    isolation: isolate;
+  }
 }

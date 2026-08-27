@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Code2, FileDiff, FileStack, LayoutPanelTop, MonitorPlay, Newspaper, Workflow, Clock, Puzzle, ArrowLeft } from 'lucide-react'
+import { Code2, FileDiff, FileStack, LayoutPanelTop, MonitorPlay, Newspaper, Workflow, Clock, Puzzle, FileSpreadsheet, ArrowLeft } from 'lucide-react'
 import { CodeEditor } from '../editor/CodeEditor'
 import { DiffViewer } from '../diff/DiffViewer'
 import { EvaluationMemo } from '../research/EvaluationMemo'
@@ -9,6 +9,8 @@ import { HtmlReportExport } from '../report/HtmlReportExport'
 import { DiagramDesigner } from '../diagram/DiagramDesigner'
 import { TaskPanel } from '../tasks/TaskPanel'
 import { PluginPanel } from '../plugins/PluginPanel'
+import { OfficePanel } from '../office/OfficePanel'
+import { useOfficeDrawerStore } from '../../stores/officeDrawerStore'
 
 export type CapabilityId =
   | 'code-editor'
@@ -20,6 +22,7 @@ export type CapabilityId =
   | 'diagram'
   | 'tasks'
   | 'plugins'
+  | 'office'
 
 interface CapabilityDef {
   id: CapabilityId
@@ -39,6 +42,7 @@ const CAPABILITIES: CapabilityDef[] = [
   { id: 'report', name: 'HTML 报告', desc: 'Markdown 渲染与导出', agent: 'Arthur', icon: Newspaper, color: '#8B5CF6' },
   { id: 'diagram', name: '编辑级图表', desc: 'standalone HTML 图表渲染', agent: 'Atlas', icon: Workflow, color: '#FF6B91' },
   { id: 'tasks', name: '定时任务', desc: '创建 / 暂停 / 立即执行', agent: 'Aurora', icon: Clock, color: '#FFD440' },
+  { id: 'office', name: '办公文档', desc: 'Univer 电子表格编辑与预览', agent: 'Arthur', icon: FileSpreadsheet, color: '#34D399' },
   { id: 'plugins', name: '插件管理', desc: '启用 / 停用已接入插件', agent: 'Alice', icon: Puzzle, color: '#06B6D4' },
 ]
 
@@ -61,12 +65,23 @@ const RENDERER: Record<CapabilityId, React.ReactElement> = {
   'diagram': <DiagramDesigner />,
   'tasks': <TaskPanel />,
   'plugins': <PluginPanel />,
+  'office': <OfficePanel />,
 }
 
 export const CapabilitiesHub: React.FC = () => {
   const [active, setActive] = useState<CapabilityId | null>(null)
+  const openOfficeDrawer = useOfficeDrawerStore((s) => s.open)
 
-  if (active) {
+  // 点击 office 卡片直接拉出抽屉，跳过内嵌渲染
+  const handleCapabilityClick = (id: CapabilityId) => {
+    if (id === 'office') {
+      openOfficeDrawer()
+      return
+    }
+    setActive(id)
+  }
+
+  if (active && active !== 'office') {
     return (
       <div className="flex flex-col h-full bg-white">
         <div className="flex items-center gap-2 px-2 py-1.5 border-b-2 border-brutal-black shrink-0">
@@ -86,13 +101,13 @@ export const CapabilitiesHub: React.FC = () => {
     <div className="flex flex-col h-full bg-white overflow-auto">
       <div className="px-3 py-2 border-b-2 border-brutal-black">
         <div className="font-bold text-xs">能力工具箱</div>
-        <div className="text-[10px] text-black/60 font-mono">9 项能力 · 与各 Agent 一一对应</div>
+        <div className="text-[10px] text-black/60 font-mono">10 项能力 · 与各 Agent 一一对应</div>
       </div>
       <div className="p-3 grid grid-cols-1 gap-2.5">
         {CAPABILITIES.map((c) => {
           const Icon = c.icon
           return (
-            <button key={c.id} onClick={() => setActive(c.id)}
+            <button key={c.id} onClick={() => handleCapabilityClick(c.id)}
               className="group text-left flex items-center gap-3 p-3 border-2 border-brutal-black bg-white shadow-brutal hover:shadow-brutal-xl hover:-translate-x-[2px] hover:-translate-y-[2px] active:shadow-none active:translate-x-0 active:translate-y-0 transition-all duration-150">
               <span className="w-9 h-9 flex items-center justify-center border-2 border-brutal-black rounded-[3px] flex-shrink-0"
                 style={{ backgroundColor: c.color, boxShadow: '2px 2px 0 #141111' }}>
@@ -103,7 +118,9 @@ export const CapabilitiesHub: React.FC = () => {
                   <span className="text-xs font-bold">{c.name}</span>
                   <Badge text={c.agent} color={c.color} />
                 </span>
-                <span className="block text-[10px] text-black/60 mt-0.5">{c.desc}</span>
+                <span className="block text-[10px] text-black/60 mt-0.5">
+                  {c.desc}
+                </span>
               </span>
             </button>
           )
