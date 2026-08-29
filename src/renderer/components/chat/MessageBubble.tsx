@@ -8,11 +8,6 @@ import { agentRegistry } from '../../agents/registry'
 import { AgentCard } from './AgentCard'
 import { AnalysisProgress } from './AnalysisProgress'
 import { cleanHandoffContent } from '../../utils/handoff'
-import { cleanOfficeBlock, parseOfficeBlock } from '../../utils/officeParser'
-import { officeService } from '../../services/officeService'
-import { useOfficeStore } from '../../stores/officeStore'
-import { OfficeCard } from './OfficeCard'
-import type { OfficeItem } from '../../stores/officeStore'
 import type { AgentConfig } from '../../agents/base'
 
 const AGENT_ICONS: Record<string, React.ComponentType<{ size?: number | string; color?: string }>> = {
@@ -29,9 +24,7 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
   const [showCard, setShowCard] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<AgentConfig | null>(null)
   const [fadingOut, setFadingOut] = useState(false)
-  const [officeWorkbooks, setOfficeWorkbooks] = useState<OfficeItem[]>([])
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const officeProcessedRef = useRef(false)
 
   // 当进度完成时，延迟淡出
   useEffect(() => {
@@ -57,98 +50,6 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
       }
     }
   }, [message.analysisProgress])
-
-  // 检测并处理 Agent 消息中的 office 块
-  const addWorkbook = useOfficeStore((s) => s.addWorkbook)
-  useEffect(() => {
-    if (!isAgent || !message.content || officeProcessedRef.current) return
-
-    const officeRegex = /```office\s*\n([\s\S]*?)```/g
-    let match: RegExpExecArray | null
-    const newWorkbooks: OfficeItem[] = []
-
-    while ((match = officeRegex.exec(message.content)) !== null) {
-      const result = parseOfficeBlock(match[0])
-      if (!result || 'error' in result) {
-        if (result && 'error' in result) {
-          console.error('[OfficeBlock] Parse error:', result.error)
-        }
-        continue
-      }
-
-      const cmd = result.command
-      switch (cmd.action) {
-        case 'create_workbook': {
-          const execResult = officeService.createWorkbook(cmd.params.name)
-          if (execResult.success && execResult.data?.id) {
-            const wb: OfficeItem = {
-              id: execResult.data.id,
-              name: cmd.params.name || '未命名工作簿',
-              state: 'draft',
-              description: cmd.params.description || '',
-            }
-            newWorkbooks.push(wb)
-            addWorkbook(wb)
-          }
-          break
-        }
-        case 'create_document': {
-          const execResult = officeService.createDocument(cmd.params.name)
-          if (execResult.success && execResult.data?.id) {
-            const doc: OfficeItem = {
-              id: execResult.data.id,
-              name: cmd.params.name || '未命名文档',
-              state: 'draft',
-              description: cmd.params.description || '',
-            }
-            newWorkbooks.push(doc)
-            addWorkbook(doc)
-          }
-          break
-        }
-        case 'insert_text': {
-          officeService.insertText(cmd.params.text || cmd.params.content || '')
-          break
-        }
-        case 'write_range': {
-          officeService.writeRange(
-            cmd.params.sheetName || 'Sheet1',
-            cmd.params.startRow || 0,
-            cmd.params.startCol || 0,
-            cmd.params.data || []
-          )
-          break
-        }
-        case 'set_style': {
-          officeService.setStyle(
-            cmd.params.sheetName || 'Sheet1',
-            cmd.params.row || 0,
-            cmd.params.col || 0,
-            cmd.params.style || {}
-          )
-          break
-        }
-        case 'export': {
-          officeService.exportWorkbook().then(blob => {
-            if (blob) {
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = cmd.params.filename || 'workbook.xlsx'
-              a.click()
-              URL.revokeObjectURL(url)
-            }
-          })
-          break
-        }
-      }
-    }
-
-    if (newWorkbooks.length > 0) {
-      setOfficeWorkbooks(prev => [...prev, ...newWorkbooks])
-    }
-    officeProcessedRef.current = true
-  }, [message.content, isAgent, addWorkbook])
 
   if (message.role === 'system') {
     return <div className="msg-system flex items-center justify-center gap-2"><Info size={12} />{message.content}</div>
@@ -196,7 +97,7 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
                     <AnalysisProgress steps={message.analysisProgress.steps} fileName={message.analysisProgress.fileName} fadingOut={fadingOut} />
                   </div>
                 )}
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanOfficeBlock(cleanHandoffContent(message.content)) : String(message.content || '')}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>
                 {message.content === '' && !message.analysisProgress && (
                   <div className="flex items-center gap-2 py-1">
                     <div className="flex gap-1">
@@ -210,13 +111,6 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
               </div>
             ) : (
               <div className="text-sm leading-relaxed whitespace-pre-wrap">{String(message.content)}</div>
-            )}
-            {officeWorkbooks.length > 0 && (
-              <div className="mt-3 space-y-2">
-                {officeWorkbooks.map((wb) => (
-                  <OfficeCard key={wb.id} workbook={wb} />
-                ))}
-              </div>
             )}
           </div>
         </div>

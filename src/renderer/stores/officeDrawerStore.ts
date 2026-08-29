@@ -16,6 +16,12 @@ interface OfficeDrawerState {
   docsFeedback: string | null
   /** 当前激活的编辑器页面，决定标题栏显示哪一页的反馈 */
   activeKind: 'sheets' | 'docs'
+  /**
+   * 文档编辑器容器版本号：每次整体重建编辑器（导入等）时 +1，
+   * OfficePanel 用它作为容器 div 的 React key，强制创建全新容器元素
+   * （Univer 的 React root 按容器元素缓存，旧元素复用会导致挂载静默失败）
+   */
+  docsVersion: number
 
   open: () => void
   close: () => void
@@ -25,6 +31,7 @@ interface OfficeDrawerState {
   setSheetsFeedback: (msg: string | null) => void
   setDocsFeedback: (msg: string | null) => void
   setActiveKind: (kind: 'sheets' | 'docs') => void
+  bumpDocsVersion: () => void
 }
 
 const DEFAULT_WIDTH = 400
@@ -37,6 +44,7 @@ export const useOfficeDrawerStore = create<OfficeDrawerState>((set) => ({
   sheetsFeedback: null,
   docsFeedback: null,
   activeKind: 'sheets',
+  docsVersion: 0,
 
   open: () => set({ isOpen: true }),
   close: () => set({ isOpen: false }),
@@ -46,6 +54,7 @@ export const useOfficeDrawerStore = create<OfficeDrawerState>((set) => ({
   setSheetsFeedback: (msg) => set({ sheetsFeedback: msg }),
   setDocsFeedback: (msg) => set({ docsFeedback: msg }),
   setActiveKind: (kind) => set({ activeKind: kind }),
+  bumpDocsVersion: () => set((s) => ({ docsVersion: s.docsVersion + 1 })),
 }))
 
 export const OFFICE_DRAWER_MIN_WIDTH = MIN_WIDTH

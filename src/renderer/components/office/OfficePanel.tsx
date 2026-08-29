@@ -35,21 +35,44 @@ async function parseDocxParagraphs(fileName: string, buffer: ArrayBuffer): Promi
   const docXml = zip.file('word/document.xml')?.asText()
   if (!docXml) return []
 
-  // 按 <w:p>...</w:p> 切分段落，每个段落内拼接所有 <w:t> 文本
+  // 解码 XML 实体（&amp; &lt; 等），否则导入的文本会带实体字面量
+  const decodeEntities = (s: string) =>
+    s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&')
+
+  // 把自闭合空段落 <w:p/> 归一化为 <w:p></w:p>，统一交给下面的段落正则处理
+  // （注意不能用 <w:p[^>]*> 之类的宽松匹配：<w:pPr>、<w:pgSz> 等标签也会被误匹配）
+  const normalizedXml = docXml.replace(/<w:p\b([^>]*)\/>/g, '<w:p$1></w:p>')
+
+  // 按 <w:p>...</w:p> 切分段落
   const paragraphs: string[] = []
   const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g
-  const textRegex = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g
+
+  // 段落内按 token 提取：<w:t> 文本、<w:tab/> 制表符、<w:br/> 换行。
+  // 注意 <w:t> 必须带边界匹配（<w:t(?:\s...)?>），否则会误匹配 <w:tab .../>，
+  // 把整段 OOXML 标签当正文抽出来（乱码根因）
+  const tokenRegex = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/?>|<w:br\b[^>]*\/?>/g
 
   let paraMatch: RegExpExecArray | null
-  while ((paraMatch = paraRegex.exec(docXml))) {
+  while ((paraMatch = paraRegex.exec(normalizedXml))) {
     const paraXml = paraMatch[0]
     let paraText = ''
-    let textMatch: RegExpExecArray | null
-    textRegex.lastIndex = 0
-    while ((textMatch = textRegex.exec(paraXml))) {
-      paraText += textMatch[1]
+    let tokenMatch: RegExpExecArray | null
+    tokenRegex.lastIndex = 0
+    while ((tokenMatch = tokenRegex.exec(paraXml))) {
+      if (tokenMatch[1] !== undefined) {
+        paraText += decodeEntities(tokenMatch[1])
+      } else if (tokenMatch[0].startsWith('<w:tab')) {
+        paraText += '\t'
+      } else {
+        paraText += '\n'
+      }
     }
-    if (paraText) paragraphs.push(paraText.trim())
+    paragraphs.push(paraText.trim())
   }
 
   return paragraphs
@@ -58,7 +81,7 @@ async function parseDocxParagraphs(fileName: string, buffer: ArrayBuffer): Promi
 /**
  * 为容器绑定 ResizeObserver，避免「就绪但白屏」（Univer 需要知道真实尺寸）
  */
-function useResizeFix(ref: React.RefObject<HTMLDivElement | null>, apiGetter: () => any | null) {
+function useResizeFix(ref: React.RefObject<HTMLDivElement | null>, apiGetter: () => any | null, resetKey?: number) {
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -82,7 +105,7 @@ function useResizeFix(ref: React.RefObject<HTMLDivElement | null>, apiGetter: ()
       clearTimeout(t)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [resetKey])
 }
 
 export const OfficePanel: React.FC = () => {
@@ -95,9 +118,29 @@ export const OfficePanel: React.FC = () => {
   const addDocument = useOfficeStore((s) => s.addDocument)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const docFileInputRef = useRef<HTMLInputElement>(null)
+  const docsVersion = useOfficeDrawerStore((s) => s.docsVersion)
+  const drawerWidth = useOfficeDrawerStore((s) => s.width)
+  const [pageInfo, setPageInfo] = useState<{ current: number; total: number } | null>(null)
+
+  // 轮询读取分页信息（骨架在编辑器挂载后异步计算，导入后需要多等几轮）
+  const refreshPageInfo = useCallback(() => {
+    let timer: ReturnType<typeof setTimeout>
+    let tries = 0
+    const tick = () => {
+      tries++
+      const n = officeService.getDocsPageInfo()
+      if (n != null) {
+        setPageInfo(n)
+        return
+      }
+      if (tries < 8) timer = setTimeout(tick, 500)
+    }
+    timer = setTimeout(tick, 800)
+    return () => clearTimeout(timer)
+  }, [])
 
   useResizeFix(sheetsContainerRef, () => officeService.sheetsAPI)
-  useResizeFix(docsContainerRef, () => officeService.docsAPI)
+  useResizeFix(docsContainerRef, () => officeService.docsAPI, docsVersion)
 
   // 初始化工作表实例
   useEffect(() => {
@@ -122,9 +165,14 @@ export const OfficePanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 初始化文档实例
+  // 初始化文档实例 —— 延迟到首次切到「文档」页时执行：
+  // 容器在 display:none 状态下初始化会让引擎把画布算成 0 尺寸，切回来后整页空白。
+  // docsInitRef 保证只初始化一次。
+  const docsInitRef = useRef(false)
   useEffect(() => {
+    if (kind !== 'docs' || docsInitRef.current) return
     if (!docsContainerRef.current) return
+    docsInitRef.current = true
 
     const ok = officeService.initDocs(docsContainerRef.current)
     if (ok) {
@@ -139,11 +187,55 @@ export const OfficePanel: React.FC = () => {
           description: '初始文档',
         })
       }
+      refreshPageInfo()
     } else {
       setDocsStatus('error')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [kind])
+
+  // 文档编辑器容器重建（导入/重排触发版本号变化）后，把待导入内容挂载到新容器。
+  // 注意：此时 service 端编辑器实例已被 prepareDocsImport 重置（initialized=false），
+  // 必须无条件调用 flushPendingDocsImport，由它内部完成 initDocs + 创建文档。
+  useEffect(() => {
+    if (docsVersion === 0) return
+    if (!docsContainerRef.current) return
+
+    const result = officeService.flushPendingDocsImport(docsContainerRef.current)
+    if (result) {
+      setDocsStatus(result.success ? 'ready' : 'error')
+      setDocsNote(result.message)
+      if (result.success) {
+        const cleanup = refreshPageInfo()
+        return cleanup
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docsVersion])
+
+  // 当前页码跟随滚动：文档滚轮不走可订阅的滚动事件流（反向滚动机制），
+  // 用轻量轮询读取可见范围，页码有变化才 setState
+  useEffect(() => {
+    if (kind !== 'docs') return
+    if (!officeService.docsInitialized) return
+    const t = setInterval(() => {
+      const info = officeService.getDocsPageInfo()
+      if (info) {
+        setPageInfo(prev => (prev && prev.current === info.current && prev.total === info.total) ? prev : info)
+      }
+    }, 300)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docsVersion, kind])
+
+  // 抽屉宽度变化（拖拽结束 600ms 后）：按新宽度重排文档（整体重建编辑器，页面宽度随容器）
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const result = officeService.reflowDocs()
+      if (result) setDocsNote('已按抽屉宽度重新排版')
+    }, 600)
+    return () => clearTimeout(t)
+  }, [drawerWidth])
 
   const handleExportSheets = useCallback(async () => {
     try {
@@ -224,19 +316,13 @@ export const OfficePanel: React.FC = () => {
 
     setDocsNote(`正在导入 ${file.name}...`)
     try {
-      // 清空现有内容后再导入
-      const cleared = officeService.clearDocument()
-      if (!cleared.success) {
-        console.error(cleared.message)
-      }
-
       const buffer = await file.arrayBuffer()
       const paragraphs = await parseDocxParagraphs(file.name, buffer)
 
-      const result = officeService.importDocumentParagraphs(paragraphs)
-      if (result.success) {
-        setDocsNote(`已导入 ${file.name}`)
-      } else {
+      // 整体重建文档编辑器：service 销毁旧实例并 bump 版本号，
+      // 新容器 div（key 变化）remount 后由 useEffect 调 flushPendingDocsImport 挂载内容
+      const result = officeService.importDocumentParagraphs(paragraphs, file.name.replace(/\.[^.]+$/, ''))
+      if (!result.success) {
         setDocsNote(`导入失败: ${result.message}`)
       }
     } catch (err: any) {
@@ -311,14 +397,14 @@ export const OfficePanel: React.FC = () => {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="text-[10px] font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-cream shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
+                  className="text-[10px] font-bold font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-cream shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
                   title="导入 .xlsx"
                 >
                   <Upload size={10} /> 导入
                 </button>
                 <button
                   onClick={handleExportSheets}
-                  className="text-[10px] font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-lime shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
+                  className="text-[10px] font-bold font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-lime shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
                   title="导出 .xlsx"
                 >
                   <Download size={10} /> 导出
@@ -336,14 +422,14 @@ export const OfficePanel: React.FC = () => {
                 />
                 <button
                   onClick={() => docFileInputRef.current?.click()}
-                  className="text-[10px] font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-cream shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
+                  className="text-[10px] font-bold font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-cream shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
                   title="导入文档"
                 >
                   <Upload size={10} /> 导入
                 </button>
                 <button
                   onClick={handleExportDocs}
-                  className="text-[10px] font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-lime shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
+                  className="text-[10px] font-bold font-mono px-2 py-0.5 border-2 border-brutal-black bg-white hover:bg-brutal-lime shadow-brutal-sm active:shadow-none active:translate-x-[1px] active:translate-y-[1px] transition-all duration-100 flex items-center gap-1"
                   title="导出 .docx"
                 >
                   <Download size={10} /> 导出
@@ -372,12 +458,26 @@ export const OfficePanel: React.FC = () => {
           className="univer-container absolute inset-0"
           style={{ display: kind === 'sheets' ? 'block' : 'none', visibility: sheetsStatus === 'ready' ? 'visible' : 'hidden' }}
         />
-        {/* 文档容器 */}
+        {/* 文档容器（key 变化时 React 会销毁旧 div 创建全新元素 —— Univer 的 React root
+            按容器元素缓存，复用旧元素二次挂载会静默失败，必须换新元素） */}
         <div
+          key={docsVersion}
           ref={docsContainerRef}
           className="univer-container absolute inset-0"
           style={{ display: kind === 'docs' ? 'block' : 'none', visibility: docsStatus === 'ready' ? 'visible' : 'hidden' }}
         />
+        {/* 页码指示：叠在底部缩放栏左侧（36px 行内垂直居中），锚定抽屉编辑区左下角（随抽屉宽度始终靠左） */}
+        {kind === 'docs' && status === 'ready' && pageInfo && (
+          <div
+            className="absolute bottom-0 left-0 z-10 flex items-center px-2 bg-white"
+            style={{ height: 36 }}
+            title="当前页 / 总页数（拖宽抽屉会重新排版，页数随之变化）"
+          >
+            <span className="text-xs font-medium" style={{ color: 'rgb(27, 28, 31)' }}>
+              第 {pageInfo.current} 页，共 {pageInfo.total} 页
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )

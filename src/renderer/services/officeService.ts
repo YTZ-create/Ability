@@ -19,6 +19,9 @@ import { UniverDocsCorePreset } from '@univerjs/preset-docs-core'
 import docsCoreEnUS from '@univerjs/preset-docs-core/locales/en-US'
 import docsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN'
 import '@univerjs/preset-docs-core/lib/index.css'
+import { DocSkeletonManagerService } from '@univerjs/docs'
+import { IRenderManagerService } from '@univerjs/engine-render'
+import { useOfficeDrawerStore } from '../stores/officeDrawerStore'
 
 type UniverAPI = any
 type Workbook = any
@@ -31,6 +34,7 @@ export interface OfficeCommandResult {
 }
 
 interface EditorContext {
+  univer: any
   univerAPI: UniverAPI
   container: HTMLElement
   initialized: boolean
@@ -38,16 +42,16 @@ interface EditorContext {
 
 class OfficeService {
   /** 电子表格实例上下文 */
-  private _sheets: EditorContext = { univerAPI: null, container: null, initialized: false }
+  private _sheets: EditorContext = { univer: null, univerAPI: null, container: null, initialized: false }
   /** 文档实例上下文 */
-  private _docs: EditorContext = { univerAPI: null, container: null, initialized: false }
+  private _docs: EditorContext = { univer: null, univerAPI: null, container: null, initialized: false }
 
   /** 初始化电子表格实例，挂载到指定容器 */
   initSheets(container: HTMLElement): boolean {
     if (this._sheets.initialized) return true
 
     try {
-      const { univerAPI } = createUniver({
+      const { univer, univerAPI } = createUniver({
         locale: LocaleType.ZH_CN,
         locales: {
           [LocaleType.EN_US]: mergeLocales([sheetsCoreEnUS]),
@@ -60,7 +64,7 @@ class OfficeService {
         ],
       })
 
-      this._sheets = { univerAPI, container, initialized: true }
+      this._sheets = { univer, univerAPI, container, initialized: true }
       return true
     } catch (err) {
       console.error('[OfficeService] initSheets failed:', err)
@@ -73,7 +77,7 @@ class OfficeService {
     if (this._docs.initialized) return true
 
     try {
-      const { univerAPI } = createUniver({
+      const { univer, univerAPI } = createUniver({
         locale: LocaleType.ZH_CN,
         locales: {
           [LocaleType.EN_US]: mergeLocales([docsCoreEnUS]),
@@ -86,7 +90,7 @@ class OfficeService {
         ],
       })
 
-      this._docs = { univerAPI, container, initialized: true }
+      this._docs = { univer, univerAPI, container, initialized: true }
       return true
     } catch (err) {
       console.error('[OfficeService] initDocs failed:', err)
@@ -234,43 +238,280 @@ class OfficeService {
   }
 
   // ──────────────── 文档方法 ────────────────
+  //
+  // 核心事实：Univer 文档的换行由 body.paragraphs 数组驱动（每段一个 {startIndex}，
+  // 指向 dataStream 中该段段落标记 \r 的位置；dataStream 末尾的 \n 是分节符）。
+  // facade 的 insertText / insertParagraph 只往 dataStream 写字符、不维护 paragraphs
+  // 数组，渲染时全部内容会挤成一个段落（导入内容全排在第一行的根因）。
+  // 因此所有内容写入都走「整体重建 body + 替换文档单元」，不使用增量插入命令。
 
-  /** 创建文档 */
+  /**
+   * 把纯文本构建为 Univer 文档数据（{ body, documentStyle }）：
+   * \r 为段落标记、\n 为分节符，paragraphs 逐段登记标记索引。
+   * documentStyle 是与 body 平级的字段，必须显式提供（取自 Univer 内置空快照的默认值）——
+   * DocumentDataModel 只在传入完全空对象时才使用内置默认，缺 documentStyle 会导致页面尺寸/边距缺失、排版错乱。
+   */
+  buildDocData(text: string, pageWidth?: number): any {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const lines = normalized.split('\n')
+    let dataStream = ''
+    const paragraphs: { startIndex: number; paragraphStyle: any }[] = []
+    for (const line of lines) {
+      dataStream += line + '\r'
+      paragraphs.push({
+        startIndex: dataStream.length - 1,
+        paragraphStyle: { spaceAbove: { v: 0 }, lineSpacing: 1.5, spaceBelow: { v: 8 } },
+      })
+    }
+    dataStream += '\n'
+    // 页面宽度适配容器（抽屉）：默认 960px 的页在 400px 抽屉里会有大片横向留白、
+    // 行尾被裁切；按容器宽度重排后 100% 缩放即可完整阅读。
+    // 高度按 A4 比例随宽度走；settings.zoomRatio 实测只影响缩放显示、不影响排版，不可用。
+    const width = Math.max(280, Math.min(1160, pageWidth ?? 960))
+    return {
+      body: {
+        dataStream,
+        paragraphs,
+        sectionBreaks: [{ startIndex: dataStream.length - 1 }],
+      },
+      documentStyle: {
+        // TRADITIONAL 版式：真实分页（页面边界可见、骨架 pages 按页拆分，可统计页数）；
+        // MODERN(2) 是连续长页，没有分页概念
+        documentFlavor: 1,
+        pageSize: { width, height: Math.round(width * 1.414) },
+        // 边距取小值：编辑器组件本身还有 20px 的 pageMargin，叠加后实际留白才正常；
+        // 之前用 50 时左/上各有 70px 的大片空白
+        marginTop: 20,
+        marginBottom: 20,
+        marginRight: 20,
+        marginLeft: 20,
+        renderConfig: {
+          zeroWidthParagraphBreak: 0,
+          vertexAngle: 0,
+          centerAngle: 0,
+          background: { rgb: '#ccc' },
+        },
+        autoHyphenation: 1,
+        doNotHyphenateCaps: 0,
+        consecutiveHyphenLimit: 2,
+        marginHeader: 30,
+        marginFooter: 30,
+      },
+    }
+  }
+
+  /** 读取活动文档的纯文本（按段落拆回 \n 分隔），无活动文档时返回空串 */
+  private getDocumentPlainText(): string {
+    const doc = this.getActiveDocument()
+    const dataStream: string = doc?.getSnapshot?.()?.body?.dataStream ?? ''
+    if (!dataStream) return ''
+    return dataStream.replace(/\r?\n$/, '').split('\r').join('\n')
+  }
+
+  // ════════════════ 文档导入（整体重建编辑器）════════════════
+  //
+  // 为什么整体重建编辑器（而不是增量改内容）：以下更轻的路径全部实测失败——
+  // 1. facade 的 insertText/insertParagraph 只写 dataStream 不维护 paragraphs 数组 → 全部挤成一行；
+  // 2. doc.command.insert-text 命令整段替换后场景不重绘 → 滚动后画布空白；
+  // 3. disposeUnit+createUniverDoc 交换单元存在渲染竞态 → 交替出现空白画布。
+  // 只有「挂载时创建单单元编辑器」的路径渲染与滚动完全正常。
+  //
+  // 为什么重建时必须换新容器元素：Univer 的 UI workbench 用 WeakMap 按容器元素缓存
+  // React root（design/render 的 createRoot 封装），dispose 后同一个容器元素再次挂载
+  // 会静默失败（容器永远空白）。因此导入流程 = officeService 重置编辑器 + 通知
+  // OfficePanel 通过 React key 重建容器 div → 新容器交给 flushPendingDocsImport 挂载。
+
+  /** 待导入的文档内容（prepareDocsImport 设置，容器重建后由 flushPendingDocsImport 消费） */
+  private _pendingDocsImport: { paragraphs: string[]; title?: string } | null = null
+  /** 当前文档的原始内容（导入后保存，供抽屉宽度变化时按新宽度重排） */
+  private _currentDocsImport: { paragraphs: string[]; title?: string } | null = null
+
+  /**
+   * 发起一次文档导入：记录内容、销毁当前 docs 编辑器实例、bump 容器版本号。
+   * OfficePanel 监听版本号，用新 key 重建容器 div 后调用 flushPendingDocsImport 完成挂载。
+   */
+  prepareDocsImport(paragraphs: string[], title?: string): OfficeCommandResult {
+    try {
+      this._pendingDocsImport = { paragraphs, title }
+      // 销毁整个 docs Univer 实例（旧容器 div 随 React key 变化被整个移除）
+      try {
+        this._docs.univer?.dispose?.()
+      } catch (err) {
+        console.warn('[OfficeService] docs univer dispose 异常:', err)
+      }
+      this._docs = { univer: null, univerAPI: null, container: null, initialized: false }
+      useOfficeDrawerStore.getState().bumpDocsVersion()
+      return { success: true, message: '正在导入...' }
+    } catch (err: any) {
+      return { success: false, message: `导入失败: ${err.message}` }
+    }
+  }
+
+  /**
+   * 抽屉宽度变化后按新宽度重排：用保存的原始内容走一次整体重建（新容器宽度决定页面宽度）。
+   * 仅在有过导入时生效；无内容或编辑器未初始化时为 no-op。
+   */
+  reflowDocs(): OfficeCommandResult | null {
+    if (!this._currentDocsImport) return null
+    if (!this._docs.initialized) return null
+    return this.prepareDocsImport(this._currentDocsImport.paragraphs, this._currentDocsImport.title)
+  }
+
+  /** 容器重建完成后挂载待导入内容（由 OfficePanel 在容器 remount 后调用） */
+  flushPendingDocsImport(container: HTMLElement): OfficeCommandResult | null {
+    const pending = this._pendingDocsImport
+    if (!pending) return null
+    this._pendingDocsImport = null
+
+    if (!this.initDocs(container)) {
+      return { success: false, message: '文档编辑器重新初始化失败' }
+    }
+
+    const text = pending.paragraphs.join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
+    // 页面宽度适配容器：抽屉内容区宽度减去组件边距（20*2）与样式边距（20*2）
+    const containerWidth = container.clientWidth || 400
+    const pageWidth = Math.max(280, containerWidth - 80)
+    const docData = this.buildDocData(text, pageWidth)
+    const unitId = `office-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const fdoc = this._docs.univerAPI.createUniverDoc({
+      id: unitId,
+      ...(pending.title ? { title: pending.title } : {}),
+      ...docData,
+    })
+    if (!fdoc) return { success: false, message: '创建文档失败' }
+
+    // 修复 IME 候选框偏位（见 fixImeAnchor 注释）
+    this.fixImeAnchor(container)
+
+    // 兜底把光标定位到文档头部
+    const tryFocus = (attempt = 0) => {
+      try {
+        fdoc.setSelection?.(0, 0)
+      } catch {
+        if (attempt < 5) requestAnimationFrame(() => tryFocus(attempt + 1))
+      }
+    }
+    requestAnimationFrame(() => tryFocus())
+
+    // 保存原始内容供宽度变化时重排
+    this._currentDocsImport = { paragraphs: pending.paragraphs, title: pending.title }
+    const count = text ? text.split('\n').length : 0
+    return {
+      success: true,
+      message: count > 0 ? `已导入 ${count} 个段落` : '文档已就绪',
+      data: { id: fdoc.getId?.() ?? fdoc.getUnitId?.(), paragraphCount: docData.body.paragraphs.length },
+    }
+  }
+
+  /**
+   * 获取当前文档的分页信息：总页数（骨架分页数据）+ 当前页（视口滚动位置推算）。
+   * 骨架在编辑器挂载后异步计算，调用方需延迟或轮询获取。
+   */
+  getDocsPageInfo(): { current: number; total: number } | null {
+    try {
+      const univer = this._docs.univer
+      const unitId = this.getActiveDocument()?.getId?.()
+      if (!univer || !unitId) return null
+      const injector = (univer as any)._injector
+      const renderManager = injector?.get?.(IRenderManagerService)
+      const render = renderManager?.getRenderById?.(unitId)
+      const skeletonManager = render?.with?.(DocSkeletonManagerService)
+      const pages = skeletonManager?.getSkeleton?.().getSkeletonData?.()?.pages
+      if (!Array.isArray(pages) || pages.length === 0) return null
+      const total = pages.length
+      // 当前页：视口可见范围（viewBound，随真实滚动更新）落在哪一页。
+      // 页纵向堆叠步长 = 页高 + 组件页边距（pageMarginTop=20）。
+      const viewport = (render as any)?.scene?.getViewport?.('viewMain')
+      const viewBound = viewport?.getBounding?.()?.viewBound
+      const pageHeight = pages[0]?.height ?? 0
+      const stride = pageHeight > 0 ? pageHeight + 20 : 0
+      let current = 1
+      if (viewBound && stride > 0) {
+        const viewMidY = (viewBound.top + viewBound.bottom) / 2
+        current = Math.min(total, Math.max(1, Math.floor(viewMidY / stride) + 1))
+      }
+      return { current, total }
+    } catch {
+      return null
+    }
+  }
+
+  /** 创建空文档（仅在当前编辑器实例内创建首个文档单元，不重建编辑器） */
   createDocument(name?: string): OfficeCommandResult {
     try {
-      if (!this._docs.univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
+      const univerAPI = this._docs.univerAPI
+      if (!univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
 
-      // 初始空段落 body：让文档一创建即为非空，避免 Univer 显示「开始」整页占位提示
-      // （默认无 body 的新文档会进入 empty 状态，只有点击占位才进入编辑）
-      // dataStream 末尾需含段落符 \r 与分节符 \n
-      const initBody: any = {
-        dataStream: '\r\n',
-        paragraphs: [{ startIndex: 0 }],
-        sectionBreaks: [{ startIndex: 1 }],
-      }
+      // 空文档页面宽度同样适配容器，避免初始文档与导入后版式不一致
+      const containerWidth = this._docs.container?.clientWidth || 400
+      const pageWidth = Math.max(280, containerWidth - 80)
+      const docData = this.buildDocData('', pageWidth)
+      const unitId = `office-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const fdoc = univerAPI.createUniverDoc({ id: unitId, ...(name ? { title: name } : {}), ...docData })
+      if (!fdoc) return { success: false, message: '创建文档失败' }
 
-      const fdoc = this._docs.univerAPI.createUniverDoc(
-        name
-          ? { title: name, body: initBody }
-          : { body: initBody }
-      )
+      // 修复 IME 候选框偏位（见 fixImeAnchor 注释）
+      const container = this._docs.container
+      if (container) this.fixImeAnchor(container)
 
-      // 兜底把光标定位到文档头部
-      const unitId = fdoc?.getId?.() ?? fdoc?.getUnitId?.()
-      if (fdoc) {
-        const tryFocus = (attempt = 0) => {
-          try {
-            fdoc.setSelection?.(0, 0)
-          } catch {
-            if (attempt < 5) requestAnimationFrame(() => tryFocus(attempt + 1))
-          }
+      const tryFocus = (attempt = 0) => {
+        try {
+          fdoc.setSelection?.(0, 0)
+        } catch {
+          if (attempt < 5) requestAnimationFrame(() => tryFocus(attempt + 1))
         }
-        requestAnimationFrame(() => tryFocus())
       }
-      return { success: true, message: '文档已创建', data: { id: unitId } }
+      requestAnimationFrame(() => tryFocus())
+
+      return { success: true, message: '文档已创建', data: { id: fdoc.getId?.() ?? fdoc.getUnitId?.() } }
     } catch (err: any) {
       return { success: false, message: `创建文档失败: ${err.message}` }
     }
+  }
+
+  /**
+   * 修复 IME 候选框偏位：Univer 的 IME 代理输入框是 position:fixed 元素，但定位算法
+   * 会把坐标减去宿主容器偏移（activate() 里的 left -= rect.left），该算法只在宿主是
+   * fixed 的「包含块」（宿主带 transform）时才成立。官方 demo 铺满窗口、宿主在 (0,0)
+   * 看不出问题；我们的编辑器嵌在抽屉里（有页面偏移），代理框会整体偏到左上。
+   * 给宿主加 transform 让它成为真正的包含块，算法即自洽。
+   * 需在编辑器挂载后调用（代理元素随渲染管线创建）。
+   */
+  fixImeAnchor(container: HTMLElement): void {
+    const apply = () => {
+      const selContainer = container.querySelector('[id^="univer-doc-selection-container"]') as HTMLElement | null
+      const parent = selContainer?.parentElement as HTMLElement | null
+      if (parent && getComputedStyle(parent).transform === 'none') {
+        parent.style.transform = 'translate(0, 0)'
+      }
+      if (!selContainer) return
+
+      // 修复候选框「跳顶」抖动：Univer 在选区刷新时会调用 deactivate() 把代理输入框
+      // 归位到 (0,0)（宿主顶部），下一拍又摆回光标处——OS 候选框随之下跳。
+      // 这里用 MutationObserver 拦截归零动作，立即恢复到最后的光标锚点位置。
+      // DEBUG：window.__disableImeObserver = true 可关闭此观察者（用于二分定位滚动问题）
+      const anySel = selContainer as any
+      if (!anySel.__imeAntiFlicker && !(window as any).__disableImeObserver) {
+        anySel.__imeAntiFlicker = true
+        let lastPos: { left: string; top: string } | null = null
+        const mo = new MutationObserver(() => {
+          const { left, top } = selContainer.style
+          if (left === '0px' && top === '0px') {
+            if (lastPos) {
+              selContainer.style.left = lastPos.left
+              selContainer.style.top = lastPos.top
+            }
+          } else {
+            lastPos = { left, top }
+          }
+        })
+        mo.observe(selContainer, { attributes: true, attributeFilter: ['style'] })
+      }
+    }
+    apply()
+    // 兜底再试：代理元素随渲染管线异步创建
+    setTimeout(apply, 300)
+    setTimeout(apply, 1000)
   }
 
   /** 获取当前活动文档 */
@@ -283,60 +524,42 @@ class OfficeService {
     }
   }
 
-  /** 在文档中插入一段文本（追加到末尾） */
+  /** 在文档末尾追加一段文本（文本中的换行会成为新段落；走整体重建编辑器流程） */
   insertText(text: string): OfficeCommandResult {
     try {
-      if (!this._docs.univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
+      if (!this._docs.initialized) return { success: false, message: 'Univer(文档) 未初始化' }
       const doc = this.getActiveDocument()
       if (!doc) return { success: false, message: '无活动文档' }
-      doc.insertText?.(text)
-      return { success: true, message: '已插入文本' }
+
+      const current = this.getDocumentPlainText()
+      const merged = current ? `${current}\n${text}` : text
+      return this.prepareDocsImport(merged.split('\n'), doc.getName?.())
     } catch (err: any) {
       return { success: false, message: `插入文本失败: ${err.message}` }
     }
   }
 
   /** 把纯文本内容导入到活动文档（按行生成段落） */
-  importDocumentText(text: string): OfficeCommandResult {
-    return this.importDocumentParagraphs(text.split('\n'))
+  importDocumentText(text: string, title?: string): OfficeCommandResult {
+    return this.importDocumentParagraphs(text.split('\n'), title)
   }
 
-  /** 把段落数组导入到活动文档（每一段为一个段落） */
-  importDocumentParagraphs(paragraphs: string[]): OfficeCommandResult {
+  /** 把段落数组导入为文档内容（整体重建编辑器，保留空行为空段落） */
+  importDocumentParagraphs(paragraphs: string[], title?: string): OfficeCommandResult {
     try {
-      if (!this._docs.univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
-      const doc = this.getActiveDocument()
-      if (!doc) return { success: false, message: '无活动文档' }
-
-      // 逐段插入，insertParagraph 会把 \n 归并为段落分隔符 \r\n，实现「一段=一段落」
-      let count = 0
-      for (const p of paragraphs) {
-        const line = p.trim()
-        if (line) {
-          doc.insertParagraph?.(line)
-          count++
-        }
-      }
-      return { success: true, message: `已导入 ${count} 个段落` }
+      if (!this._docs.initialized) return { success: false, message: 'Univer(文档) 未初始化' }
+      return this.prepareDocsImport(paragraphs, title)
     } catch (err: any) {
       return { success: false, message: `导入文档失败: ${err.message}` }
     }
   }
 
-  /** 清空活动文档内容 */
+  /** 清空文档内容（整体重建编辑器为空文档） */
   clearDocument(): OfficeCommandResult {
     try {
-      if (!this._docs.univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
+      if (!this._docs.initialized) return { success: false, message: 'Univer(文档) 未初始化' }
       const doc = this.getActiveDocument()
-      if (!doc) return { success: false, message: '无活动文档' }
-      // 先全选再删除：选中整个 dataStream 文本区域并插入空串
-      const snapshot = doc.getSnapshot?.()
-      const body = snapshot?.body
-      const len = body?.dataStream?.length ?? 0
-      if (len >= 2) {
-        doc.insertText?.('', { startOffset: 0, endOffset: len - 2 })
-      }
-      return { success: true, message: '文档已清空' }
+      return this.prepareDocsImport([], doc?.getName?.())
     } catch (err: any) {
       return { success: false, message: `清空文档失败: ${err.message}` }
     }
@@ -370,8 +593,10 @@ class OfficeService {
 
   /** 销毁全部实例 */
   destroy(): void {
-    this._sheets = { univerAPI: null, container: null, initialized: false }
-    this._docs = { univerAPI: null, container: null, initialized: false }
+    try { this._sheets.univer?.dispose?.() } catch { /* skip */ }
+    try { this._docs.univer?.dispose?.() } catch { /* skip */ }
+    this._sheets = { univer: null, univerAPI: null, container: null, initialized: false }
+    this._docs = { univer: null, univerAPI: null, container: null, initialized: false }
   }
 }
 

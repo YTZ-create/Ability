@@ -8,6 +8,13 @@ import { initKnowledgeBase } from './knowledge'
 import { createDependencyAnalyzer } from './codebase'
 import { initMemoryStore } from './memory'
 import { useSidebarStore } from './stores/sidebarStore'
+import { officeService } from './services/officeService'
+import { usePluginStore } from './stores/pluginStore'
+
+// 开发模式调试句柄（仅 DEV 构建暴露）
+if (import.meta.env.DEV) {
+  ;(window as any).__debug = { officeService, pluginStore: usePluginStore }
+}
 
 // 先渲染 UI，不等待 Neutralino
 ReactDOM.createRoot(document.getElementById('root')!).render(
