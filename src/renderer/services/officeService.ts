@@ -237,6 +237,155 @@ class OfficeService {
     }
   }
 
+  // ──────────────── Ethan 抽屉同步扩展 ────────────────
+  //
+  // 只服务于 formDrawerSyncService（Ethan 答案实时写入办公抽屉），全部带兜底降级，
+  // 不改动上方既有方法的行为。
+
+  /** 列出活动工作簿的全部 sheet 名（供同步服务判断单/多 sheet 策略） */
+  getSheetNames(): string[] {
+    try {
+      const wb = this.getActiveWorkbook()
+      if (!wb) return []
+      return (wb.getSheets() || []).map((s: any) => s.getName?.()).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * 以数据快照方式导入多 sheet 工作簿（真实命名 sheet）。
+   * 区别于 writeRange 把多 sheet 挤进活动 sheet 的有损做法，本方法为 Ethan 抽屉同步
+   * 构建独立工作簿；sheet 坐标与原文件一致，答案可按 cellRef 精准回写。
+   */
+  importWorkbookSheets(
+    sheets: { name: string; data: (string | number | boolean | null)[][] }[],
+    workbookName?: string
+  ): OfficeCommandResult {
+    try {
+      if (!this._sheets.univerAPI) return { success: false, message: 'Univer(表格) 未初始化' }
+      if (!sheets.length) return { success: false, message: '无可导入的工作表数据' }
+
+      // 构建数据快照。cellData 值类型 t 采用 CellValueType 枚举数值：1=字符串 2=数字 3=布尔
+      const sheetSnapshot: Record<string, any> = {}
+      const sheetOrder: string[] = []
+      sheets.forEach((s, i) => {
+        const id = `sheet-${Date.now()}-${i}`
+        const cellData: Record<string, Record<string, { v: any; t: number }>> = {}
+        let maxCol = 0
+        s.data.forEach((row, r) => {
+          if (!row || row.length === 0) return
+          const rowData: Record<string, { v: any; t: number }> = {}
+          row.forEach((v, c) => {
+            if (v === null || v === undefined || v === '') return
+            maxCol = Math.max(maxCol, c + 1)
+            rowData[c] = { v, t: typeof v === 'number' ? 2 : typeof v === 'boolean' ? 3 : 1 }
+          })
+          if (Object.keys(rowData).length > 0) cellData[r] = rowData
+        })
+        sheetSnapshot[id] = {
+          id,
+          name: s.name || `Sheet${i + 1}`,
+          rowCount: Math.max(s.data.length + 20, 100),
+          columnCount: Math.max(maxCol + 5, 26),
+          cellData,
+        }
+        sheetOrder.push(id)
+      })
+
+      const wb = this._sheets.univerAPI.createWorkbook({
+        id: `wb-${Date.now()}`,
+        ...(workbookName ? { name: workbookName } : {}),
+        sheetOrder,
+        sheets: sheetSnapshot,
+      })
+      if (!wb) return { success: false, message: '创建工作簿失败' }
+
+      // 快照路径校验：sheet 数量与命名与预期一致才算成功，否则降级为逐 sheet 写入
+      const createdNames = (wb.getSheets() || []).map((s: any) => s.getName?.())
+      const expectedNames = sheets.map((s) => s.name || `Sheet${sheets.indexOf(s) + 1}`)
+      if (createdNames.length < expectedNames.length) {
+        return this._fallbackImportSheets(wb, sheets)
+      }
+
+      // 激活第一个 sheet（激活失败不影响数据正确性）
+      try {
+        const first = wb.getSheetByName(expectedNames[0])
+        if (first) wb.setActiveSheet(first)
+      } catch { /* skip */ }
+
+      return {
+        success: true,
+        message: `已导入 ${sheets.length} 个工作表`,
+        data: { id: wb.getUnitId?.(), sheetCount: sheets.length, sheetNames: expectedNames },
+      }
+    } catch (err: any) {
+      return { success: false, message: `导入工作簿失败: ${err.message}` }
+    }
+  }
+
+  /** 快照导入失败时的降级路径：在活动工作簿内逐 sheet insertSheet + setValues */
+  private _fallbackImportSheets(
+    wb: Workbook,
+    sheets: { name: string; data: (string | number | boolean | null)[][] }[]
+  ): OfficeCommandResult {
+    try {
+      for (const s of sheets) {
+        const ws = wb.insertSheet?.(s.name)
+        if (!ws) continue
+        const rows = s.data.length
+        const cols = s.data.reduce((m, row) => Math.max(m, row?.length ?? 0), 0)
+        if (rows === 0 || cols === 0) continue
+        const matrix: (string | number | boolean | null)[][] = []
+        for (let r = 0; r < rows; r++) {
+          const row: (string | number | boolean | null)[] = []
+          for (let c = 0; c < cols; c++) row.push(s.data[r]?.[c] ?? null)
+          matrix.push(row)
+        }
+        ws.getRange(0, 0, rows - 1, cols - 1)?.setValues?.(matrix)
+      }
+      return { success: true, message: `已导入 ${sheets.length} 个工作表（降级模式）` }
+    } catch (err: any) {
+      return { success: false, message: `导入工作表失败: ${err.message}` }
+    }
+  }
+
+  /** 按名称定位并写入单个单元格（xlsx 答案同步用；坐标 0 基） */
+  writeCell(sheetName: string, row: number, col: number, value: string | number | boolean): OfficeCommandResult {
+    try {
+      if (!this._sheets.univerAPI) return { success: false, message: 'Univer(表格) 未初始化' }
+      const wb = this.getActiveWorkbook()
+      if (!wb) return { success: false, message: '无活动工作簿' }
+
+      const sheet = (sheetName ? wb.getSheetByName(sheetName) : null) || wb.getActiveSheet()
+      if (!sheet) return { success: false, message: `找不到工作表: ${sheetName}` }
+
+      const range = sheet.getRange(row, col, row, col)
+      if (!range || typeof range.setValues !== 'function') {
+        return { success: false, message: '当前 Univer 版本不支持单元格写入' }
+      }
+      range.setValues([[value]])
+      return { success: true, message: `已写入 ${sheetName || '活动工作表'} (${row + 1},${col + 1})` }
+    } catch (err: any) {
+      return { success: false, message: `写入单元格失败: ${err.message}` }
+    }
+  }
+
+  /** 按名称激活工作表（尽力而为，失败不影响数据写入） */
+  activateSheet(sheetName: string): OfficeCommandResult {
+    try {
+      if (!this._sheets.univerAPI) return { success: false, message: 'Univer(表格) 未初始化' }
+      const wb = this.getActiveWorkbook()
+      if (!wb) return { success: false, message: '无活动工作簿' }
+      const sheet = wb.getSheetByName(sheetName)
+      if (!sheet) return { success: false, message: `找不到工作表: ${sheetName}` }
+      wb.setActiveSheet(sheet)
+      return { success: true, message: `已切换到 ${sheetName}` }
+    } catch (err: any) {
+      return { success: false, message: `切换工作表失败: ${err.message}` }
+    }
+  }
+
   // ──────────────── 文档方法 ────────────────
   //
   // 核心事实：Univer 文档的换行由 body.paragraphs 数组驱动（每段一个 {startIndex}，

@@ -13,70 +13,10 @@ import { officeService } from '../../services/officeService'
 import { useOfficeStore } from '../../stores/officeStore'
 import { useOfficeDrawerStore } from '../../stores/officeDrawerStore'
 import * as XLSX from 'xlsx'
-import PizZip from 'pizzip'
+import { parseDocxParagraphs } from '../../utils/docxParagraphs'
 
 export type OfficeStatus = 'initializing' | 'ready' | 'error'
 export type EditorKind = 'sheets' | 'docs'
-
-/**
- * 解析上传文件为段落数组（保留结构，避免 docx 所有文本拼成一行）
- * 支持 .docx（按 <w:p> 段落提取）及其余格式（按纯文本分行）
- */
-async function parseDocxParagraphs(fileName: string, buffer: ArrayBuffer): Promise<string[]> {
-  if (!/\.docx$/i.test(fileName)) {
-    const text = new TextDecoder().decode(buffer)
-    return text
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .split('\n')
-  }
-
-  const zip = new PizZip(buffer)
-  const docXml = zip.file('word/document.xml')?.asText()
-  if (!docXml) return []
-
-  // 解码 XML 实体（&amp; &lt; 等），否则导入的文本会带实体字面量
-  const decodeEntities = (s: string) =>
-    s
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/&amp;/g, '&')
-
-  // 把自闭合空段落 <w:p/> 归一化为 <w:p></w:p>，统一交给下面的段落正则处理
-  // （注意不能用 <w:p[^>]*> 之类的宽松匹配：<w:pPr>、<w:pgSz> 等标签也会被误匹配）
-  const normalizedXml = docXml.replace(/<w:p\b([^>]*)\/>/g, '<w:p$1></w:p>')
-
-  // 按 <w:p>...</w:p> 切分段落
-  const paragraphs: string[] = []
-  const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g
-
-  // 段落内按 token 提取：<w:t> 文本、<w:tab/> 制表符、<w:br/> 换行。
-  // 注意 <w:t> 必须带边界匹配（<w:t(?:\s...)?>），否则会误匹配 <w:tab .../>，
-  // 把整段 OOXML 标签当正文抽出来（乱码根因）
-  const tokenRegex = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/?>|<w:br\b[^>]*\/?>/g
-
-  let paraMatch: RegExpExecArray | null
-  while ((paraMatch = paraRegex.exec(normalizedXml))) {
-    const paraXml = paraMatch[0]
-    let paraText = ''
-    let tokenMatch: RegExpExecArray | null
-    tokenRegex.lastIndex = 0
-    while ((tokenMatch = tokenRegex.exec(paraXml))) {
-      if (tokenMatch[1] !== undefined) {
-        paraText += decodeEntities(tokenMatch[1])
-      } else if (tokenMatch[0].startsWith('<w:tab')) {
-        paraText += '\t'
-      } else {
-        paraText += '\n'
-      }
-    }
-    paragraphs.push(paraText.trim())
-  }
-
-  return paragraphs
-}
 
 /**
  * 为容器绑定 ResizeObserver，避免「就绪但白屏」（Univer 需要知道真实尺寸）
