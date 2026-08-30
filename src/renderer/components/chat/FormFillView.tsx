@@ -23,6 +23,7 @@ export const FormFillView: React.FC = () => {
     selectedFieldIds, endSession,
     fillMethod, setFillMethod,
     updateFieldDeletePlaceholder,
+    drawerSyncMode, drawerSyncError,
   } = useFormFillStore()
   const currentFieldIndex = activeDocument?.currentFieldIndex || 0
   const activeFolder = useFolderStore((s) => s.folders.find((f) => f.id === s.activeFolderId))
@@ -464,8 +465,37 @@ ${errorMessage}
               <div className="text-[10px] text-black/70 font-mono">{activeDocument.fileName}</div>
             </div>
           </div>
-          <div className="text-[10px] font-mono text-black/70">
-            {filledCount} / {fillOrder.length} 已填
+          <div className="flex items-center gap-2">
+            {/* 抽屉同步状态（M3）：开启时提示答案实时写入办公抽屉，异常时提示降级 */}
+            {(() => {
+              const mode = drawerSyncMode
+              if (mode === 'sheets' || mode === 'docs') {
+                return (
+                  <span
+                    className={`text-[9px] font-bold font-mono px-1.5 py-0.5 border-2 border-brutal-black ${
+                      activeDocument?.status === 'completed' ? 'bg-brutal-lime' : 'bg-brutal-yellow'
+                    }`}
+                    title={mode === 'sheets' ? '答案实时写入办公抽屉（工作表）' : '答案实时写入办公抽屉（文档）'}
+                  >
+                    {activeDocument?.status === 'completed' ? '✓ 已同步完成' : '↔ 同步至办公抽屉'}
+                  </span>
+                )
+              }
+              if (mode === 'none' && drawerSyncError) {
+                return (
+                  <span
+                    className="text-[9px] font-bold font-mono px-1.5 py-0.5 border-2 border-brutal-black bg-brutal-pink text-white"
+                    title={drawerSyncError}
+                  >
+                    同步不可用
+                  </span>
+                )
+              }
+              return null
+            })()}
+            <span className="text-[10px] font-mono text-black/70">
+              {filledCount} / {fillOrder.length} 已填
+            </span>
           </div>
         </div>
         <div className="h-2 bg-brutal-cream border-2 border-brutal-black">

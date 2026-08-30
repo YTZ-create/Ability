@@ -18,6 +18,7 @@ import {
   OFFICE_DRAWER_MAX_WIDTH,
 } from '../../stores/officeDrawerStore'
 import { usePluginStore } from '../../stores/pluginStore'
+import { useFormFillStore } from '../../stores/formFillStore'
 
 export const OfficeDrawer: React.FC = () => {
   const isOpen = useOfficeDrawerStore((s) => s.isOpen)
@@ -25,6 +26,12 @@ export const OfficeDrawer: React.FC = () => {
   const close = useOfficeDrawerStore((s) => s.close)
   const setWidth = useOfficeDrawerStore((s) => s.setWidth)
   const feedback = useOfficeDrawerStore((s) => (s.activeKind === 'docs' ? s.docsFeedback : s.sheetsFeedback))
+
+  // Ethan 抽屉同步状态徽标（M3）：会话进行中显示同步中/已完成，异常时显示降级提示
+  const drawerSyncMode = useFormFillStore((s) => s.drawerSyncMode)
+  const drawerSyncError = useFormFillStore((s) => s.drawerSyncError)
+  const docStatus = useFormFillStore((s) => s.activeDocument?.status)
+  const isSyncing = drawerSyncMode === 'sheets' || drawerSyncMode === 'docs'
 
   const plugins = usePluginStore((s) => s.plugins)
   const isOfficeEnabled = plugins.find((p) => p.id === 'univer-office')?.enabled ?? false
@@ -82,6 +89,17 @@ export const OfficeDrawer: React.FC = () => {
           </span>
           <span className="font-bold text-xs">办公文档</span>
           <span className="text-[9px] text-black/50 font-mono">Univer</span>
+          {/* Ethan 同步状态徽标（brutalist：粗边框 + 硬底色，与现有状态徽章同款） */}
+          {isSyncing && (
+            <span
+              className={`text-[9px] font-bold font-mono px-1.5 py-0.5 border-2 border-brutal-black flex-shrink-0 ${
+                docStatus === 'completed' ? 'bg-brutal-lime' : 'bg-brutal-yellow'
+              }`}
+              title={docStatus === 'completed' ? 'Ethan 填写已完成' : 'Ethan 答案实时同步中'}
+            >
+              {docStatus === 'completed' ? '✓ 已完成' : '● Ethan 同步中'}
+            </span>
+          )}
           {feedback && (
             <span className="min-w-0 flex-1 text-[10px] px-1.5 py-0.5 bg-white border border-brutal-black font-mono text-black/70 truncate" title={feedback}>
               {feedback}
