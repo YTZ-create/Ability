@@ -10,10 +10,21 @@ import { initMemoryStore } from './memory'
 import { useSidebarStore } from './stores/sidebarStore'
 import { officeService } from './services/officeService'
 import { usePluginStore } from './stores/pluginStore'
+import { useFormFillStore } from './stores/formFillStore'
+import { useOfficeDrawerStore } from './stores/officeDrawerStore'
+import { useChatStore } from './stores/chatStore'
+import { formDrawerSyncService } from './services/formDrawerSyncService'
 
-// 开发模式调试句柄（仅 DEV 构建暴露）
+// 开发模式调试句柄（仅 DEV 构建暴露，指向应用真实单例，供控制台联调/测试）
 if (import.meta.env.DEV) {
-  ;(window as any).__debug = { officeService, pluginStore: usePluginStore }
+  ;(window as any).__debug = {
+    officeService,
+    pluginStore: usePluginStore,
+    formFillStore: useFormFillStore,
+    officeDrawerStore: useOfficeDrawerStore,
+    chatStore: useChatStore,
+    formDrawerSyncService,
+  }
 }
 
 // 先渲染 UI，不等待 Neutralino

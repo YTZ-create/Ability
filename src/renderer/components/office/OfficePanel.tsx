@@ -49,13 +49,11 @@ function useResizeFix(ref: React.RefObject<HTMLDivElement | null>, apiGetter: ()
 }
 
 export const OfficePanel: React.FC = () => {
-  const [kind, setKind] = useState<EditorKind>('sheets')
-  const storeActiveKind = useOfficeDrawerStore((s) => s.activeKind)
-  // 跟随外部指定的编辑页（Ethan 抽屉同步自动导入时由 service setActiveKind 指定 sheets/docs）。
-  // 外部值与本页一致时无操作，避免与下方 setActiveKind(kind) 的回写形成循环
-  useEffect(() => {
-    setKind((prev) => (prev === storeActiveKind ? prev : storeActiveKind))
-  }, [storeActiveKind])
+  // 编辑页类型以 officeDrawerStore.activeKind 为唯一数据源：
+  // 本地面板切页与外部程序化指定（Ethan 抽屉同步导入）共用一个 store 字段，
+  // 避免本地 state 与 store 双向同步造成的乒乓覆盖（外部设置的页面被回写冲掉）
+  const kind = useOfficeDrawerStore((s) => s.activeKind)
+  const setKind = useOfficeDrawerStore((s) => s.setActiveKind)
   const sheetsContainerRef = useRef<HTMLDivElement>(null)
   const docsContainerRef = useRef<HTMLDivElement>(null)
   const [sheetsStatus, setSheetsStatus] = useState<OfficeStatus>('initializing')
@@ -281,15 +279,9 @@ export const OfficePanel: React.FC = () => {
 
   const setSheetsFeedback = useOfficeDrawerStore((s) => s.setSheetsFeedback)
   const setDocsFeedback = useOfficeDrawerStore((s) => s.setDocsFeedback)
-  const setActiveKind = useOfficeDrawerStore((s) => s.setActiveKind)
   // 工作表 / 文档 反馈包装：各自独立存储，互不覆盖
   const setSheetsNote = useCallback((msg: string) => setSheetsFeedback(msg), [setSheetsFeedback])
   const setDocsNote = useCallback((msg: string) => setDocsFeedback(msg), [setDocsFeedback])
-
-  // 同步当前激活页面，驱动标题栏反馈的显隐
-  useEffect(() => {
-    setActiveKind(kind)
-  }, [kind, setActiveKind])
 
   const status = kind === 'sheets' ? sheetsStatus : docsStatus
 

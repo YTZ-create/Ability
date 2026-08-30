@@ -112,10 +112,15 @@ class FormDrawerSyncService {
           return 'none'
         }
 
-        // 单 sheet → 答案按 cellRef 精准回写；多 sheet → 答案写「填写记录」区
-        if (sheets.length === 1) {
+        // 同步策略（导入时即定型，避免中途 insertSheet 丢弃更早的写格——实测踩坑）：
+        // - 单 sheet 且字段都有 cellRef → 答案精准写回原单元格
+        // - 其余 → 立刻创建「填写记录」问答区，答案追加写入
+        const needQaSheet =
+          sheets.length > 1 || document.fields.some((f) => !f.location?.cellRef)
+        if (!needQaSheet) {
           this._targetSheetName = sheets[0].name
           this._qaSheetName = null
+          this._qaRow = 0
         } else {
           this._targetSheetName = null
           const ensured = officeService.ensureSheet(QA_SHEET_NAME)
@@ -230,11 +235,15 @@ class FormDrawerSyncService {
     const applied = this._applyAnswerToParagraphs(this._docModel, field, value)
     this._docModel = applied.paragraphs
 
-    // 整体重建编辑器（当前架构下唯一可靠的文档写入路径，见 officeService.ts 长注释）
-    const result = officeService.prepareDocsImport(this._docModel, this._docTitle ?? undefined)
+    // 整体重建编辑器（当前架构下唯一可靠的文档写入路径，见 officeService.ts 长注释）；
+    // 透传同步反馈文案，避免容器重建完成时被通用导入文案覆盖
+    const feedback = applied.inPlace
+      ? `✓ 已填入：${this._truncate(field.label)}`
+      : `✓ 已记录：${this._truncate(field.label)}`
+    const result = officeService.prepareDocsImport(this._docModel, this._docTitle ?? undefined, feedback)
     if (!result.success) return { ok: false, message: result.message }
 
-    setDrawerFeedback('docs', applied.inPlace ? `✓ 已填入：${this._truncate(field.label)}` : `✓ 已记录：${this._truncate(field.label)}`)
+    setDrawerFeedback('docs', feedback)
     return { ok: true, message: applied.inPlace ? '已填入文档对应位置' : '已追加到文档末尾' }
   }
 
@@ -372,6 +381,7 @@ class FormDrawerSyncService {
     this._qaSheetName = null
     this._qaRow = 0
     this._failures = 0
+    officeService.clearSyncHandles()
   }
 
   // ──────────────── 内部工具 ────────────────
@@ -410,14 +420,14 @@ class FormDrawerSyncService {
     }
   }
 
-  /** 等待表格编辑器初始化完成（插件自动启用后 OfficePanel 需要一拍挂载） */
+  /** 等待表格编辑器初始化完成且活动工作簿就绪（插件自动启用后 OfficePanel 需要一拍挂载） */
   private async _waitForSheets(timeoutMs = 5000): Promise<boolean> {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-      if (officeService.sheetsInitialized) return true
+      if (officeService.sheetsInitialized && officeService.getActiveWorkbook()) return true
       await new Promise((r) => setTimeout(r, 150))
     }
-    return officeService.sheetsInitialized
+    return officeService.sheetsInitialized && !!officeService.getActiveWorkbook()
   }
 
   /** 重新以二进制读取源文件并解析为多 sheet 二维数组（rawContent 对二进制格式不可靠，必须重读） */
