@@ -5,6 +5,8 @@ import { useFolderStore } from '../../stores/folderStore'
 import { agentRegistry } from '../../agents/registry'
 import { FormFillerAgent, type FormField } from '../../agents/formFiller'
 import { getPlatform } from '../../api/neutralino'
+import { formDrawerSyncService } from '../../services/formDrawerSyncService'
+import { useChatStore } from '../../stores/chatStore'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { FillMethod } from '../../utils/docxHandler'
@@ -237,6 +239,44 @@ ${nextField.value ? `当前值：${nextField.value}` : ''}`)
     try {
       const agent = agentRegistry.get('form-filler') as FormFillerAgent | undefined
       if (!agent) throw new Error('FormFillerAgent not found')
+
+      // Ethan 抽屉同步导出（M4）：抽屉同步有效时优先从办公抽屉直接导出成品
+      // （所见即所得，含用户在抽屉中的手动修改）；失败自动回退到下方原有填写引擎
+      if (drawerSyncMode === 'sheets' || drawerSyncMode === 'docs') {
+        const saveResult = await formDrawerSyncService.exportFilledToDisk(drawerSyncMode, activeDocument.filePath)
+        if (saveResult.success && saveResult.filePath) {
+          const filledCount = activeDocument.fields.filter((f) => f.value).length
+          addBubble('agent', `✅ 文档填写完成！
+
+**新文件已保存：**
+${saveResult.filePath}
+
+**原始文件：** ${activeDocument.filePath}
+
+共填写 ${filledCount} 个字段（办公抽屉所见即所得）。`)
+
+          // 消息流追加办公成果卡（OfficeCard ready 态：文件名 + 在抽屉中打开）
+          useChatStore.getState().addMessage({
+            role: 'agent',
+            content: '填写完成的文档已保存，可随时在办公抽屉中查看。',
+            agentName: 'Ethan',
+            agentColor: '#F472B6',
+            officeCard: {
+              name: saveResult.filePath.split(/[/\\]/).pop() || saveResult.filePath,
+              kind: drawerSyncMode === 'sheets' ? 'workbook' : 'document',
+              description: `Ethan 抽屉同步 · 原始文件：${activeDocument.fileName}`,
+            },
+          })
+
+          setTimeout(() => {
+            endSession(saveResult.filePath!)
+          }, 1000)
+          return
+        }
+        addBubble('agent', `⚠️ 办公抽屉导出失败：${saveResult.error}
+
+将自动使用原有填写引擎完成本次填写。`)
+      }
 
       const filledContent = await agent.fillDocument(
         activeDocument.originalContent,

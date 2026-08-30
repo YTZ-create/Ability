@@ -8,6 +8,7 @@ import { agentRegistry } from '../../agents/registry'
 import { AgentCard } from './AgentCard'
 import { AnalysisProgress } from './AnalysisProgress'
 import { cleanHandoffContent } from '../../utils/handoff'
+import { OfficeCard } from './OfficeCard'
 import type { AgentConfig } from '../../agents/base'
 
 const AGENT_ICONS: Record<string, React.ComponentType<{ size?: number | string; color?: string }>> = {
@@ -98,6 +99,22 @@ export const MessageBubble: React.FC<{ message: ChatMessage }> = ({ message }) =
                   </div>
                 )}
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{typeof message.content === 'string' ? cleanHandoffContent(message.content) : String(message.content || '')}</ReactMarkdown>
+                {/* 办公成果卡（M4）：Ethan 抽屉同步导出成功后展示，ready 态只显示文件名 + 在抽屉中打开 */}
+                {message.officeCard && (
+                  <div className="mt-2 max-w-[280px]">
+                    <OfficeCard
+                      workbook={{
+                        id: message.id,
+                        type: message.officeCard.kind,
+                        name: message.officeCard.name,
+                        state: 'ready',
+                        createdAt: message.timestamp,
+                        updatedAt: message.timestamp,
+                        description: message.officeCard.description,
+                      }}
+                    />
+                  </div>
+                )}
                 {message.content === '' && !message.analysisProgress && (
                   <div className="flex items-center gap-2 py-1">
                     <div className="flex gap-1">

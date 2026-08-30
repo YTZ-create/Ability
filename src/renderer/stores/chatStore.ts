@@ -45,6 +45,8 @@ export interface ChatMessage {
   files?: FileEntry[]
   searchResults?: SearchResult[]
   analysisProgress?: AnalysisProgressState
+  /** 办公成果卡（Ethan 抽屉同步导出成功后在消息流中展示，M4） */
+  officeCard?: { name: string; kind: 'workbook' | 'document'; description?: string }
 }
 
 export interface AgentConversationMessage {

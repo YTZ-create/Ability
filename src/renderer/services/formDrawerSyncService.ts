@@ -301,6 +301,67 @@ class FormDrawerSyncService {
     }
   }
 
+  /**
+   * 导出成品并落盘到原文件同目录（*_filled 后缀）：
+   * - 目标已存在时自动加时间戳，绝不覆盖原文件或历史成品
+   * - 写入后读回验证（字节长度一致），失败返回 error 由调用方回退到原有填写引擎
+   */
+  async exportFilledToDisk(
+    mode: DrawerSyncMode,
+    originalFilePath: string
+  ): Promise<{ success: boolean; filePath?: string; error?: string }> {
+    try {
+      const platform = getPlatform()
+      if (!platform) return { success: false, error: 'Platform not available' }
+
+      const exportResult = await this.exportFilled(mode)
+      if (!exportResult.success || !exportResult.blob) {
+        return { success: false, error: exportResult.error ?? '导出失败' }
+      }
+      const buffer = await exportResult.blob.arrayBuffer()
+
+      let target = originalFilePath.replace(/\.([^.]+)$/, '_filled.$1')
+      if (await this._fileExists(target)) {
+        const d = new Date()
+        const p = (n: number) => String(n).padStart(2, '0')
+        const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`
+        target = originalFilePath.replace(/\.([^.]+)$/, `_filled_${stamp}.$1`)
+      }
+
+      const writeResult = await platform.fs.writeBinaryFile(target, buffer)
+      if (!writeResult.success) {
+        return { success: false, error: `写入文件失败: ${writeResult.error}` }
+      }
+
+      // 读回验证：字节长度必须一致（不做全量比对，导出内容来源即为内存数据）
+      const readBack = await platform.fs.readBinaryFile(target)
+      if (readBack.error || !readBack.content) {
+        return { success: false, error: `写入验证失败：无法读取已写入的文件 — ${readBack.error}` }
+      }
+      if (readBack.content.byteLength !== buffer.byteLength) {
+        return {
+          success: false,
+          error: `写入验证失败：写入 ${buffer.byteLength} 字节，读回 ${readBack.content.byteLength} 字节`,
+        }
+      }
+      return { success: true, filePath: target }
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) }
+    }
+  }
+
+  /** 文件存在性探测（Neutralino getStats；不存在/不可达均视为不存在） */
+  private async _fileExists(path: string): Promise<boolean> {
+    try {
+      const nl = (window as any).Neutralino
+      if (!nl) return false
+      await nl.filesystem.getStats(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // ──────────────── 会话收尾 ────────────────
 
   /** 会话结束/重开时清空内部状态（由 formFillStore.endSession 调用） */
