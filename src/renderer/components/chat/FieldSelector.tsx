@@ -3,7 +3,7 @@ import { Check, Square, FileInput, ChevronLeft } from 'lucide-react'
 import { useFormFillStore } from '../../stores/formFillStore'
 
 export const FieldSelector: React.FC = () => {
-  const { activeDocument, setFormFillPhase, setCurrentFieldIndex, setSelectedFieldIds } = useFormFillStore()
+  const { activeDocument, setFormFillPhase, setCurrentFieldIndex, setSelectedFieldIds, drawerSyncMode, drawerSyncError } = useFormFillStore()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const hasInitializedRef = useRef(false)
 
@@ -67,6 +67,20 @@ export const FieldSelector: React.FC = () => {
           <div className="text-sm font-bold mb-1">请勾选需要填写的字段</div>
           <div className="text-xs text-black/70">从文档中提取到 {totalCount} 个待填项，勾选后逐个填写。</div>
         </div>
+
+        {/* 抽屉同步状态（M5）：已导入时提示边问边填体验，不支持时说明走原有路线 */}
+        {drawerSyncMode === 'sheets' || drawerSyncMode === 'docs' ? (
+          <div className="bg-brutal-lime border-2 border-l-4 border-brutal-black p-2.5 mb-3">
+            <div className="text-xs font-bold">✓ 文件已导入办公抽屉</div>
+            <div className="text-[11px] text-black/70 mt-0.5">
+              开始填写后，你的每个答案会实时同步到抽屉{drawerSyncMode === 'sheets' ? '的对应单元格' : ''}，可在抽屉中随时查看。
+            </div>
+          </div>
+        ) : drawerSyncError ? (
+          <div className="bg-brutal-cream border-2 border-l-4 border-brutal-black p-2.5 mb-3">
+            <div className="text-[11px] text-black/70">{drawerSyncError}</div>
+          </div>
+        ) : null}
 
         {/* 全选按钮 */}
         <button
