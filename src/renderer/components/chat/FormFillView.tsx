@@ -135,8 +135,9 @@ ${firstField.placeholder ? `> ${firstField.placeholder}` : ''}`)
     const currentField = activeDocument.fields.find(f => f.id === currentFieldId)
     if (!currentField) return
 
-    // 占位文字删除确认：如果字段有 anchorText，先弹出确认框，阻止用户输入
-    if (currentField.anchorText && pendingPlaceholderConfirm?.fieldId !== currentField.id) {
+    // 占位文字删除确认：如果字段有 anchorText 且尚未做过处理方式选择，先弹出确认框
+    // （决策记录在字段的 deletePlaceholder 上——只看组件内临时状态会导致确认后再次弹卡、永远无法作答）
+    if (currentField.anchorText && currentField.deletePlaceholder === undefined && pendingPlaceholderConfirm?.fieldId !== currentField.id) {
       addBubble('user', text)
       addBubble('agent', `检测到该字段对应文档中的占位文字：
 
