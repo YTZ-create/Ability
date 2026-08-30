@@ -50,6 +50,12 @@ function useResizeFix(ref: React.RefObject<HTMLDivElement | null>, apiGetter: ()
 
 export const OfficePanel: React.FC = () => {
   const [kind, setKind] = useState<EditorKind>('sheets')
+  const storeActiveKind = useOfficeDrawerStore((s) => s.activeKind)
+  // 跟随外部指定的编辑页（Ethan 抽屉同步自动导入时由 service setActiveKind 指定 sheets/docs）。
+  // 外部值与本页一致时无操作，避免与下方 setActiveKind(kind) 的回写形成循环
+  useEffect(() => {
+    setKind((prev) => (prev === storeActiveKind ? prev : storeActiveKind))
+  }, [storeActiveKind])
   const sheetsContainerRef = useRef<HTMLDivElement>(null)
   const docsContainerRef = useRef<HTMLDivElement>(null)
   const [sheetsStatus, setSheetsStatus] = useState<OfficeStatus>('initializing')

@@ -386,6 +386,25 @@ class OfficeService {
     }
   }
 
+  /** 确保 sheet 存在（不存在则创建），用于「填写记录」问答区 */
+  ensureSheet(sheetName: string): OfficeCommandResult {
+    try {
+      if (!this._sheets.univerAPI) return { success: false, message: 'Univer(表格) 未初始化' }
+      const wb = this.getActiveWorkbook()
+      if (!wb) return { success: false, message: '无活动工作簿' }
+      const existing = wb.getSheetByName(sheetName)
+      if (existing) {
+        try { wb.setActiveSheet(existing) } catch { /* skip */ }
+        return { success: true, message: `工作表 ${sheetName} 已存在` }
+      }
+      const ws = wb.insertSheet?.(sheetName)
+      if (!ws) return { success: false, message: `创建工作表失败: ${sheetName}` }
+      return { success: true, message: `已创建工作表 ${sheetName}` }
+    } catch (err: any) {
+      return { success: false, message: `确保工作表失败: ${err.message}` }
+    }
+  }
+
   // ──────────────── 文档方法 ────────────────
   //
   // 核心事实：Univer 文档的换行由 body.paragraphs 数组驱动（每段一个 {startIndex}，

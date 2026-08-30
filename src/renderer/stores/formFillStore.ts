@@ -3,6 +3,7 @@ import type { FormField, FormDocument } from '../agents/formFiller'
 import type { FileEntry } from '../api/platformAPI'
 import { useChatStore } from './chatStore'
 import type { FillMethod } from '../utils/docxHandler'
+import { formDrawerSyncService, type DrawerSyncMode } from '../services/formDrawerSyncService'
 
 interface FormFillState {
   activeDocument: FormDocument | null
@@ -12,6 +13,10 @@ interface FormFillState {
   selectedFieldIds: string[]
   availableFiles: FileEntry[]
   fillMethod: FillMethod
+  /** Ethan 抽屉同步模式（M2）：null=无会话；'none'=开关关闭或文件不支持，走原有路线 */
+  drawerSyncMode: DrawerSyncMode | null
+  /** 抽屉同步异常提示（降级/不支持时给 UI 徽标展示） */
+  drawerSyncError: string | null
 
   setActiveDocument: (doc: FormDocument | null) => void
   setIsProcessing: (v: boolean) => void
@@ -37,8 +42,27 @@ export const useFormFillStore = create<FormFillState>((set, get) => ({
   selectedFieldIds: [],
   availableFiles: [],
   fillMethod: 'word-com' as FillMethod,
+  drawerSyncMode: null,
+  drawerSyncError: null,
 
-  setActiveDocument: (doc) => set({ activeDocument: doc }),
+  setActiveDocument: (doc) => {
+    set({ activeDocument: doc })
+    // Ethan 抽屉同步（M2 钩子）：覆盖全部三个文件入口（FileSelector/ChatInput 直连/Leader 分发）。
+    // 开关关闭时 autoImport 内部直接返回 'none'，行为与旧版一致
+    if (doc) {
+      void formDrawerSyncService.autoImport(doc).then((mode) => {
+        set({
+          drawerSyncMode: mode,
+          drawerSyncError:
+            mode === 'none' && formDrawerSyncService.isSyncEnabled()
+              ? '该格式暂不支持抽屉同步，将按原有方式填写'
+              : null,
+        })
+      })
+    } else {
+      set({ drawerSyncMode: null, drawerSyncError: null })
+    }
+  },
   setIsProcessing: (v) => set({ isProcessing: v }),
   setIsFormFillingSession: (v) => set({ isFormFillingSession: v }),
   setFormFillPhase: (phase) => set({ formFillPhase: phase }),
@@ -51,14 +75,25 @@ export const useFormFillStore = create<FormFillState>((set, get) => ({
       return { activeDocument: { ...s.activeDocument, currentFieldIndex: index } }
     }),
 
-  updateField: (fieldId, value, filledBy) =>
-    set((s) => {
-      if (!s.activeDocument) return s
-      const fields = s.activeDocument.fields.map((f) =>
-        f.id === fieldId ? { ...f, value, filledBy } : f
-      )
-      return { activeDocument: { ...s.activeDocument, fields } }
-    }),
+  updateField: (fieldId, value, filledBy) => {
+    const prev = get()
+    if (!prev.activeDocument) return
+    const field = prev.activeDocument.fields.find((f) => f.id === fieldId)
+    const updatedFields = prev.activeDocument.fields.map((f) =>
+      f.id === fieldId ? { ...f, value, filledBy } : f
+    )
+    set((s) => ({ activeDocument: s.activeDocument ? { ...s.activeDocument, fields: updatedFields } : s.activeDocument }))
+
+    // Ethan 抽屉同步（M3 钩子）：ChatInput 通道与 FormFillView 通道的答案都经过这里
+    if (field && prev.drawerSyncMode) {
+      const updatedDoc: FormDocument = { ...prev.activeDocument, fields: updatedFields }
+      const result = formDrawerSyncService.syncAnswer({ ...field, value }, updatedDoc, prev.drawerSyncMode)
+      if (result.downgrade) {
+        // 连续失败自动降级为仅对话模式，问答主流程不受影响
+        set({ drawerSyncMode: 'none', drawerSyncError: '抽屉同步连续失败，已自动切换为仅对话填写' })
+      }
+    }
+  },
 
   updateFieldDeletePlaceholder: (fieldId, deletePlaceholder) =>
     set((s) => {
@@ -112,7 +147,11 @@ export const useFormFillStore = create<FormFillState>((set, get) => ({
       selectedFieldIds: [],
       availableFiles: [],
       isProcessing: false,
+      drawerSyncMode: null,
+      drawerSyncError: null,
     })
+    // 清空抽屉同步服务的内部状态（文档模型/目标 sheet/失败计数）
+    formDrawerSyncService.resetSession()
     // 关键修复：退出表单填写会话时，必须把 activeAgentId 重置为 null
     // 否则后续消息会因 activeAgentId 仍为 'form-filler' 而被错误路由到 Ethan
     state.setActiveAgent(null)
