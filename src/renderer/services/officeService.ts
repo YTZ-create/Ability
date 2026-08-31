@@ -455,9 +455,11 @@ class OfficeService {
       })
     }
     dataStream += '\n'
-    // 页面宽度适配容器（抽屉）：默认 960px 的页在 400px 抽屉里会有大片横向留白、
-    // 行尾被裁切；按容器宽度重排后 100% 缩放即可完整阅读。
-    // 高度按 A4 比例随宽度走；settings.zoomRatio 实测只影响缩放显示、不影响排版，不可用。
+    // 页面宽度必须在「创建时」与容器匹配——实测 Univer 文档渲染在创建瞬间烘焙布局，
+    // 页面宽于创建时容器会导致文字绘制到画布外（整页空白）。
+    // 排版稳定性策略：创建后不再因宽度变化重建/重排（分页、折行恒定），
+    // 抽屉宽度变化只通过 fitDocZoom 调整显示缩放（缩放不影响排版分页）。
+    // 高度按 A4 比例随宽度走；settings.zoomRatio 只影响显示缩放、不影响排版。
     const width = Math.max(280, Math.min(1160, pageWidth ?? 960))
     return {
       body: {
@@ -539,8 +541,32 @@ class OfficeService {
   }
 
   /**
-   * 抽屉宽度变化后按新宽度重排：用保存的原始内容走一次整体重建（新容器宽度决定页面宽度）。
-   * 仅在有过导入时生效；无内容或编辑器未初始化时为 no-op。
+   * 按抽屉宽度自动设置文档显示缩放（fit width）。
+   * 缩放只影响显示、不影响排版分页（页面固定 A4），窄抽屉也能看到整页内容。
+   * 注意必须走 docs-ui 的缩放命令（直接改 snapshot.settings 不会触发重绘）。
+   */
+  fitDocZoom(): OfficeCommandResult {
+    try {
+      const doc = this.getActiveDocument()
+      const container = this._docs.container
+      const api = this._docs.univerAPI
+      if (!doc || !container || !api) return { success: false, message: '文档未就绪' }
+      const pageWidth: number = doc.getSnapshot?.()?.documentStyle?.pageSize?.width ?? 794
+      const avail = Math.max(200, container.clientWidth - 40)
+      const ratio = Math.min(2, Math.max(0.3, avail / pageWidth))
+      const unitId = doc.getId?.()
+      const result = api.executeCommand?.('doc.command.set-zoom-ratio', { zoomRatio: ratio, documentId: unitId })
+      // 命令不可用时兜底直接写模型（至少数据正确，渲染随下次刷新生效）
+      if (!result) doc.setZoomRatio?.(ratio)
+      return { success: true, message: `显示缩放 ${Math.round(ratio * 100)}%` }
+    } catch (err: any) {
+      return { success: false, message: `设置缩放失败: ${err.message}` }
+    }
+  }
+
+  /**
+   * 按当前内容重建文档编辑器。页面尺寸已固定 A4，重建不改变排版；
+   * 保留该方法供兼容调用（此前抽屉宽度变化会触发重排，现已移除该触发）。
    */
   reflowDocs(): OfficeCommandResult | null {
     if (!this._currentDocsImport) return null
@@ -559,7 +585,7 @@ class OfficeService {
     }
 
     const text = pending.paragraphs.join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
-    // 页面宽度适配容器：抽屉内容区宽度减去组件边距（20*2）与样式边距（20*2）
+    // 页宽按创建时容器适配（渲染约束），创建后宽度变化不再重排（见 fitDocZoom）
     const containerWidth = container.clientWidth || 400
     const pageWidth = Math.max(280, containerWidth - 80)
     const docData = this.buildDocData(text, pageWidth)
@@ -573,6 +599,7 @@ class OfficeService {
 
     // 修复 IME 候选框偏位（见 fixImeAnchor 注释）
     this.fixImeAnchor(container)
+    // 页宽创建时已与容器匹配，无需缩放；抽屉宽度变化时由 OfficePanel 调 fitDocZoom 适配显示
 
     // 兜底把光标定位到文档头部
     const tryFocus = (attempt = 0) => {
@@ -634,7 +661,7 @@ class OfficeService {
       const univerAPI = this._docs.univerAPI
       if (!univerAPI) return { success: false, message: 'Univer(文档) 未初始化' }
 
-      // 空文档页面宽度同样适配容器，避免初始文档与导入后版式不一致
+      // 页宽按创建时容器适配（渲染约束），与导入文档版式一致
       const containerWidth = this._docs.container?.clientWidth || 400
       const pageWidth = Math.max(280, containerWidth - 80)
       const docData = this.buildDocData('', pageWidth)

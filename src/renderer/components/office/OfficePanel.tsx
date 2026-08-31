@@ -63,7 +63,6 @@ export const OfficePanel: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const docFileInputRef = useRef<HTMLInputElement>(null)
   const docsVersion = useOfficeDrawerStore((s) => s.docsVersion)
-  const drawerWidth = useOfficeDrawerStore((s) => s.width)
   const [pageInfo, setPageInfo] = useState<{ current: number; total: number } | null>(null)
 
   // 轮询读取分页信息（骨架在编辑器挂载后异步计算，导入后需要多等几轮）
@@ -172,12 +171,13 @@ export const OfficePanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docsVersion, kind])
 
-  // 抽屉宽度变化（拖拽结束 600ms 后）：按新宽度重排文档（整体重建编辑器，页面宽度随容器）
+  // 抽屉宽度变化不再触发文档重排：页面尺寸固定 A4，排版稳定不随宽度变化。
+  // 只重新计算「适配宽度」的显示缩放（缩放不影响排版分页），保证窄抽屉也能看到整页
+  const drawerWidth = useOfficeDrawerStore((s) => s.width)
   useEffect(() => {
     const t = setTimeout(() => {
-      const result = officeService.reflowDocs()
-      if (result) setDocsNote('已按抽屉宽度重新排版')
-    }, 600)
+      officeService.fitDocZoom()
+    }, 250)
     return () => clearTimeout(t)
   }, [drawerWidth])
 
