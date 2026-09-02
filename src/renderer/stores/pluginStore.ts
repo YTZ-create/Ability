@@ -23,6 +23,7 @@ export const usePluginStore = create<PluginState>((set) => ({
     { id: 'diagram-design', name: 'diagram-design Skill', version: '0.1.0', description: '27 种编辑级图表视觉类型', enabled: false, category: 'skill' },
     { id: 'open-code-review', name: 'Open Code Review', version: '0.1.0', description: 'Avery 行级精度代码审查 CLI', enabled: false, category: 'skill' },
     { id: 'univer-office', name: '办公文档 (Univer)', version: '0.1.0', description: 'Univer 电子表格编辑与预览', enabled: false, category: 'office' },
+    { id: 'docs-html', name: '文档页 HTML 渲染', version: '0.1.0', description: '办公抽屉文档页改用 HTML 原生渲染（表格/合并/边框稳定），关掉即回退 Univer', enabled: true, category: 'office' },
     { id: 'ethan-drawer-sync', name: 'Ethan 抽屉同步', version: '0.1.0', description: 'Ethan 填写答案实时同步到办公抽屉（关闭即回退为纯对话填写）', enabled: true, category: 'office' },
   ],
   toggle: (id) => set((s) => ({ plugins: s.plugins.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p)) })),

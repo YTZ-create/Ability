@@ -189,4 +189,100 @@
     overflow: hidden;
     isolation: isolate;
   }
+
+  /* HTML 文档渲染（docxRichRenderer）—— 表格/单元格像 Word 默认排版 */
+  .docx-html {
+    user-select: text;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #141111;
+    word-break: break-word;
+  }
+  .docx-html .p {
+    min-height: 1.2em;
+    outline: none;
+    padding: 1px 2px;
+    border-radius: 0;
+  }
+  /* 可编辑片段悬停/聚焦提示，便于用户感知可编辑区域 */
+  .docx-html .p[contenteditable="true"]:hover {
+    outline: 1px dashed #14111144;
+  }
+  .docx-html .p[contenteditable="true"]:focus {
+    outline: 1px solid #141111;
+    background: #FFF9E8;
+  }
+  .docx-html table.t {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0;
+    table-layout: fixed;
+  }
+  .docx-html table.t td {
+    border: 1px solid #141111;
+    padding: 4px 6px;
+    vertical-align: middle;
+    min-width: 8px;
+  }
+  .docx-html table.t td [contenteditable="true"] {
+    min-height: 1.3em;
+  }
+
+  /* 分页模式：页面像纸张，页与页之间留阴影间隙 */
+  .docx-html.paged {
+    padding: 4px 12px 24px;
+  }
+  .docx-html.paged .doc-page {
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid #848484;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+    margin: 0 auto 22px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  /* 页面内容区：真正的文档版心。页边距/分栏由内联样式（源自 docx <w:sectPr>）决定 */
+  .docx-html.paged .doc-page-inner {
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* 页眉/页脚区：贴近 Word 的上下留白，页眉下、页脚上各一条细线 */
+  .docx-html.paged .doc-zone {
+    box-sizing: border-box;
+    flex: 0 0 auto;
+  }
+  .docx-html.paged .doc-zone.hdr {
+    border-bottom: 1px solid #0000001c;
+    padding-bottom: 4px;
+  }
+  .docx-html.paged .doc-zone.ftr {
+    border-top: 1px solid #0000001c;
+    padding-top: 4px;
+  }
+  .docx-html.paged .doc-block {
+    margin: 0;
+  }
+  .docx-html.paged table.t.fragment + table.t.fragment {
+    /* 跨页的表格片段之间不加额外空隙 */
+    margin-top: 0;
+  }
+  /* run 级下划线/删除线（顶层 span 标记） */
+  .docx-html .doc-undl {
+    text-decoration: underline;
+    -webkit-text-decoration: underline;
+    text-decoration-style: solid;
+  }
+  .docx-html .doc-strike {
+    text-decoration: line-through;
+    -webkit-text-decoration: line-through;
+  }
+  /* 页眉/页脚里的页码占位（渲染层把占位替换为当前页号） */
+  .docx-html .doc-pagenum {
+    display: inline-block;
+    min-width: 1.2em;
+    text-align: center;
+  }
 }

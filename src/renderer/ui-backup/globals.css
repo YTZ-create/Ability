@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background-color: #FFFAEF;
+    color: #141111;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid #141111;
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #FFFAEF;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #141111;
+  }
+}
+
+@layer components {
+  .btn-brutal {
+    @apply border-2 border-brutal-black font-bold;
+    box-shadow: 4px 4px 0px #141111;
+    transition: all 0.05s ease-out;
+    cursor: pointer;
+  }
+  .btn-brutal:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0px #141111;
+  }
+  .btn-brutal:hover {
+    transform: translateY(-1px);
+    box-shadow: 6px 6px 0px #141111;
+  }
+
+  .card-brutal {
+    @apply border-2 border-brutal-black bg-white;
+    box-shadow: 4px 4px 0px #141111;
+    transition: all 0.05s ease-out;
+  }
+  .card-brutal:hover {
+    transform: translateY(-3px);
+    box-shadow: 7px 7px 0px #141111;
+  }
+
+  .input-brutal {
+    @apply border-2 border-brutal-black bg-white px-4 py-2;
+    box-shadow: 2px 2px 0px #141111;
+    transition: all 0.05s ease-out;
+    outline: none;
+  }
+  .input-brutal:focus {
+    box-shadow: 4px 4px 0px #141111;
+    transform: translateY(-1px);
+  }
+  .input-brutal::placeholder {
+    color: rgba(20, 17, 17, 0.7);
+  }
+
+  .select-brutal {
+    @apply border-2 border-brutal-black bg-white px-4 py-2 font-bold;
+    box-shadow: 2px 2px 0px #141111;
+    transition: all 0.05s ease-out;
+    outline: none;
+    cursor: pointer;
+  }
+  .select-brutal:focus {
+    box-shadow: 4px 4px 0px #141111;
+    transform: translateY(-1px);
+  }
+  .select-brutal:hover {
+    @apply bg-brutal-cream;
+  }
+
+  .msg-agent {
+    @apply border-l-4 border-brutal-yellow pl-4 py-2;
+    user-select: text;
+  }
+  .msg-user {
+    @apply bg-brutal-black text-white px-4 py-2;
+    box-shadow: 4px 4px 0px #FFD440;
+    user-select: text;
+  }
+  .msg-system {
+    @apply text-black/80 text-sm italic text-center py-2;
+  }
+
+  .tab-brutal {
+    @apply border-2 border-brutal-black font-bold px-4 py-1.5 text-sm cursor-pointer rounded-none;
+    transition: all 0.05s ease-out;
+  }
+  .tab-brutal.active {
+    @apply bg-brutal-black text-brutal-cream;
+  }
+  .tab-brutal:not(.active):hover {
+    @apply bg-brutal-yellow;
+  }
+
+  .file-card {
+    @apply border-2 border-brutal-black bg-white p-3 cursor-pointer;
+    box-shadow: 2px 2px 0px #141111;
+    transition: all 0.05s ease-out;
+  }
+  .file-card:hover {
+    box-shadow: 4px 4px 0px #141111;
+    transform: translateY(-1px);
+  }
+
+  .prose table {
+    @apply w-full border-collapse border-2 border-brutal-black my-3;
+    box-shadow: 2px 2px 0px #141111;
+  }
+  .prose th {
+    @apply border-2 border-brutal-black bg-brutal-yellow px-3 py-1.5 text-left font-bold text-xs;
+  }
+  .prose td {
+    @apply border-2 border-brutal-black px-3 py-1.5 text-xs;
+  }
+  .prose tr:nth-child(even) td {
+    @apply bg-brutal-cream;
+  }
+
+  .shadow-brutal-sm {
+    box-shadow: 2px 2px 0px #141111;
+  }
+}

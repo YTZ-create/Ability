@@ -16,7 +16,10 @@ import * as XLSX from 'xlsx'
 import { officeService } from './officeService'
 import { useOfficeDrawerStore } from '../stores/officeDrawerStore'
 import { usePluginStore } from '../stores/pluginStore'
-import { parseDocxParagraphsFromBase64 } from '../utils/docxParagraphs'
+import { parseDocxRichDocumentFromBase64 } from '../utils/docxParagraphs'
+import { docxRichToBlob } from '../utils/docxRichRenderer'
+import { mergeAnswerIntoParagraph } from '../utils/docxAnswerMerge'
+import type { DocxRichDocument } from '../utils/docxParagraphs'
 import { getPlatform } from '../api/neutralino'
 import type { FormDocument, FormField } from '../agents/formFiller'
 
@@ -35,6 +38,11 @@ export interface DrawerExportResult {
   error?: string
 }
 
+/** 文本模型每一行 → 富结构精确位置的路径（与 _docModel 并行） */
+type SyncDocPath =
+  | { type: 'paragraph'; blockIdx: number }
+  | { type: 'table-row'; blockIdx: number; rowIdx: number; cellTexts: string[] }
+
 /** 常量：问答记录 sheet 名（多 sheet 降级 / 无 cellRef 降级时答案写这里） */
 export const QA_SHEET_NAME = '填写记录'
 /** 连续失败降级阈值 */
@@ -43,6 +51,10 @@ const FAILURE_THRESHOLD = 3
 class FormDrawerSyncService {
   /** 文档同步的文本模型（导入时的原始段落数组，答案就地更新后整体重建） */
   private _docModel: string[] | null = null
+  /** 文档同步的富结构模型（仅 .docx 导入时设置；含表格/合并/边框，用于重建时完整还原排版） */
+  private _docRich: DocxRichDocument | null = null
+  /** 文本模型 → 富结构路径的并行映射（与 _docModel 索引一一对应） */
+  private _docModelPaths: SyncDocPath[] | null = null
   private _docTitle: string | null = null
   /** 表格同步：cellRef 命中时的目标 sheet（单 sheet 文件） */
   private _targetSheetName: string | null = null
@@ -79,7 +91,7 @@ class FormDrawerSyncService {
   /**
    * 文件提取完成后自动导入办公抽屉。返回同步模式（写入 formFillStore.drawerSyncMode）。
    * - .xlsx/.xls/.csv → 打开抽屉工作表页，构建真实命名多 sheet 工作簿
-   * - .docx → 打开抽屉文档页，按原始段落导入
+   * - .docx → 打开抽屉文档页，按富结构（含表格/合并/边框）导入
    * - .txt/.md/.html 等文本 → 文档页按行导入
    * - 其余（pdf/doc 等）→ 'none'（不支持抽屉同步，走原有纯对话路线）
    */
@@ -131,12 +143,12 @@ class FormDrawerSyncService {
         return 'sheets'
       }
 
-      // ── 文档路径 ──
+      // ── 文档路径（docx 走「富结构」含表格/合并/边框；不再压成纯文本）──
       if (ext === '.docx') {
         if (!document.rawContent) return 'none'
-        const paragraphs = await parseDocxParagraphsFromBase64(document.fileName, document.rawContent)
-        if (!paragraphs.length) return 'none'
-        return this._importDocParagraphs(paragraphs, document)
+        const rich = await parseDocxRichDocumentFromBase64(document.fileName, document.rawContent)
+        if (!rich.blocks.length) return 'none'
+        return this._importDocRich(rich, document)
       }
 
       // 纯文本类（rawContent 即文件原文）
@@ -154,11 +166,12 @@ class FormDrawerSyncService {
     }
   }
 
-  /** 文档路径共用：打开抽屉文档页 + 整体重建导入 */
+  /** 文档路径共用（纯文本）：打开抽屉文档页 + 整体重建导入 */
   private _importDocParagraphs(paragraphs: string[], document: FormDocument): DrawerSyncMode {
     const drawer = useOfficeDrawerStore.getState()
     this._docModel = [...paragraphs]
     this._docTitle = this._titleOf(document.fileName)
+    this._docRich = null
 
     drawer.open()
     drawer.setActiveKind('docs')
@@ -171,6 +184,157 @@ class FormDrawerSyncService {
     }
     setDrawerFeedback('docs', `已导入 ${document.fileName}`)
     return 'docs'
+  }
+
+  /**
+   * 文档路径共用（富结构：含表格/合并/边框/列宽）：
+   * - 展示侧用 prepareDocsImportRich 完整还原 docx 排版
+   * - 答案同步侧维护一个「段落文本模型」_docModel 供 anchorText/占位符匹配
+   * - 答案写入时：先把答案应用到 _docModel，再把改后的文本回写到 _docRich 对应段落，
+   *   最后用 prepareDocsImportRich 重建 → 表格/合并/边框不丢，答案也写到正确位置
+   */
+  private _importDocRich(rich: DocxRichDocument, document: FormDocument): DrawerSyncMode {
+    const drawer = useOfficeDrawerStore.getState()
+    this._docRich = rich
+    this._docModel = this._extractTextModel(rich)
+    this._docTitle = this._titleOf(document.fileName)
+
+    drawer.open()
+    drawer.setActiveKind('docs')
+    const result = officeService.prepareDocsImportRich(rich, this._docTitle)
+    if (!result.success) {
+      this._docRich = null
+      this._docModel = null
+      return 'none'
+    }
+    const tableCount = rich.blocks.filter((b) => b.type === 'table').length
+    const paraCount = rich.blocks.filter((b) => b.type === 'paragraph').length
+    const msg = tableCount > 0
+      ? `已导入 ${document.fileName}（${paraCount} 段 + ${tableCount} 个表格）`
+      : `已导入 ${document.fileName}`
+    setDrawerFeedback('docs', msg)
+    return 'docs'
+  }
+
+  /**
+   * 从富结构文档中提取段落文本模型（供答案同步的 anchorText/占位符匹配使用）。
+   * 表格行合并为 " ｜ " 分隔的单行（与旧 parseDocxParagraphs 行为一致，保证答案同步逻辑不变）。
+   * 同时维护 _docModelPaths（与 _docModel 并行）记录每个文本行对应的富结构精确位置
+   * （paragraph 块 / 表格某行的某单元格），答案写入时据此精准回写，避免索引错位。
+   */
+  private _extractTextModel(rich: any): string[] {
+    const out: string[] = []
+    const paths: SyncDocPath[] = []
+    for (let bi = 0; bi < rich.blocks.length; bi++) {
+      const block = rich.blocks[bi]
+      if (block.type === 'paragraph') {
+        out.push(this._paragraphToText(block.paragraph))
+        paths.push({ type: 'paragraph', blockIdx: bi })
+      } else if (block.type === 'table') {
+        const table = block.table
+        for (let ri = 0; ri < table.rows.length; ri++) {
+          const row = table.rows[ri]
+          const cells = row
+            .map((c: any) => this._cellToText(c))
+            .map((s: string) => s.trim())
+          while (cells.length > 1 && cells[cells.length - 1] === '') cells.pop()
+          if (cells.some((s: string) => s !== '')) {
+            out.push(cells.join(' ｜ '))
+            paths.push({ type: 'table-row', blockIdx: bi, rowIdx: ri, cellTexts: cells })
+          }
+        }
+      }
+    }
+    this._docModelPaths = paths
+    return out
+  }
+
+  /** 段落→纯文本（拼接所有 run） */
+  private _paragraphToText(p: any): string {
+    return (p.runs || []).map((r: any) => r.text || '').join('')
+  }
+
+  /** 单元格→纯文本（多段落用空格连接；与旧 normalizeCellText 行为一致） */
+  private _cellToText(c: any): string {
+    const parts = (c.paragraphs || []).map((p: any) => this._paragraphToText(p))
+    const all = parts.join('\n').split('\n').map((s: string) => s.trim()).filter((s: string) => s !== '')
+    if (all.length === 0) return ''
+    if (all.every((s: string) => Array.from(s).length === 1)) return all.join('')
+    return all.join(' ')
+  }
+
+  /**
+   * 把答案同步产生的 _docModel 改动回写到 _docRich 对应位置。
+   * 使用 _docModelPaths（与 _docModel 并行，导入时建立）精确定位：
+   * - paragraph 行 → 智能重写 runs（保留原 run 样式，仅替换"占位 runs"为 value run）
+   * - table-row 行 → 对比该行前后 cell 文本，把发生变化的那个 cell 的段落 runs 重写
+   * 找不到对应路径时退化为旧策略（数 paragraph 块），保证不丢答案。
+   */
+  private _applyTextModelToRich(oldText: string[], newText: string[]): void {
+    if (!this._docRich) return
+    const rich = this._docRich
+    const min = Math.min(oldText.length, newText.length)
+    for (let i = 0; i < min; i++) {
+      if (oldText[i] === newText[i]) continue
+      const path = this._docModelPaths?.[i]
+      if (path && path.type === 'paragraph') {
+        const blk = rich.blocks[path.blockIdx]
+        if (blk && blk.type === 'paragraph') {
+          this._mergeAnswerIntoParagraph(blk.paragraph, oldText[i], newText[i])
+          continue
+        }
+      }
+      if (path && path.type === 'table-row') {
+        const blk = rich.blocks[path.blockIdx]
+        if (blk && blk.type === 'table' && blk.table.rows[path.rowIdx]) {
+          const row = blk.table.rows[path.rowIdx]
+          const before = this._rowCellTexts(row)
+          const after = newText[i].split(' ｜ ').map((s) => s.trim())
+          this._applyTextToRowCells(row, before, after)
+          continue
+        }
+      }
+      // 兜底
+      let paraCount = -1
+      for (let j = 0; j < rich.blocks.length; j++) {
+        if (rich.blocks[j].type === 'paragraph') {
+          paraCount++
+          if (paraCount === i) {
+            this._mergeAnswerIntoParagraph(rich.blocks[j].paragraph, oldText[i], newText[i])
+            break
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * 把 answer 智能合并到一个段落里，保留原 run 的字体/粗体/字号。
+   * 委托给 docxAnswerMerge.mergeAnswerIntoParagraph（纯函数，逻辑独立可测）。
+   */
+  private _mergeAnswerIntoParagraph(paragraph: any, oldText: string, newText: string): void {
+    mergeAnswerIntoParagraph(paragraph, oldText, newText)
+  }
+
+  /** 表格行的所有 cell 文本（trim，剔除空尾列；与文本模型生成规则一致） */
+  private _rowCellTexts(row: any[]): string[] {
+    const cells = row.map((c) => this._cellToText(c)).map((s) => s.trim())
+    while (cells.length > 1 && cells[cells.length - 1] === '') cells.pop()
+    return cells
+  }
+
+  /** 把 newText 按行应用回某行各 cell：找到变化 cell，智能合并（保留原 run 样式） */
+  private _applyTextToRowCells(row: any[], before: string[], after: string[]): void {
+    const n = Math.max(before.length, after.length)
+    for (let k = 0; k < n; k++) {
+      const b = before[k] ?? ''
+      const a = after[k] ?? ''
+      if (b === a) continue
+      const cell = row[k]
+      if (!cell) continue
+      const target = cell.paragraphs?.[0]
+      if (target) this._mergeAnswerIntoParagraph(target, b, a)
+    }
   }
 
   // ──────────────── 答案同步 ────────────────
@@ -240,7 +404,17 @@ class FormDrawerSyncService {
     const feedback = applied.inPlace
       ? `✓ 已填入：${this._truncate(field.label)}`
       : `✓ 已记录：${this._truncate(field.label)}`
-    const result = officeService.prepareDocsImport(this._docModel, this._docTitle ?? undefined, feedback)
+
+    let result: { success: boolean; message: string }
+    if (this._docRich) {
+      // 富结构文档（.docx）：先把文本模型变化回写到富结构对应位置，再走富结构路径重建
+      // → 表格/合并/边框不丢，答案也正确落到 Univer 渲染
+      this._applyTextModelToRich(applied.oldParagraphs, applied.paragraphs)
+      result = officeService.prepareDocsImportRich(this._docRich, this._docTitle ?? undefined, feedback)
+    } else {
+      // 纯文本路径
+      result = officeService.prepareDocsImport(this._docModel, this._docTitle ?? undefined, feedback)
+    }
     if (!result.success) return { ok: false, message: result.message }
 
     setDrawerFeedback('docs', feedback)
@@ -253,24 +427,36 @@ class FormDrawerSyncService {
    * 2. 段落含字段 label 且带占位符（下划线/待填/冒号空）→ 替换占位符
    * 3. 文末追加问答行（label：value）
    * 全部策略都保留原始段落内容（不删除原文，只替换占位片段）
+   * 返回值附带 oldParagraphs，供富结构文档（.docx）回写到 _docRich 使用。
    */
   private _applyAnswerToParagraphs(
     paragraphs: string[],
     field: FormField,
     value: string
-  ): { paragraphs: string[]; inPlace: boolean } {
+  ): { paragraphs: string[]; inPlace: boolean; oldParagraphs: string[] } {
+    const oldParagraphs = [...paragraphs]
     const model = [...paragraphs]
 
     // 策略 1：anchorText 锚点替换
+    // 关键修复：anchorText 的语义是"定位填写位置"，而不是"要被 value 替换的整段文本"。
+    // 正确语义是：value 应该出现在 anchorText 之后，而不是吃掉 anchorText。
+    // - 若 anchorText 末尾是占位符（下划线/待填/方括号/省略号），则整段 anchorText
+    //   替换为 value（label 已含在 anchorText 内）
+    // - 否则在 anchorText 之后插入 value（保留 label + 已有内容）
     if (field.anchorText) {
       const idx = model.findIndex((p) => p.includes(field.anchorText!))
       if (idx >= 0) {
         const anchor = field.anchorText
-        model[idx] =
-          field.deletePlaceholder === false
-            ? model[idx].replace(anchor, `${anchor}${value}`)
-            : model[idx].replace(anchor, value)
-        return { paragraphs: model, inPlace: true }
+        const placeholderTail = /[＿_＿]{2,}|（待填）|\(待填\)|【待填】|【[^【】]*】|\[[^\[\]]*\]|…{1,}$/
+        if (placeholderTail.test(anchor)) {
+          // anchorText 已含占位符 → 整段替换为 value
+          model[idx] = model[idx].replace(anchor, value)
+        } else {
+          // anchorText 只是 label/位置 → 在 anchorText 之后插入 value
+          const pos = model[idx].indexOf(anchor) + anchor.length
+          model[idx] = model[idx].slice(0, pos) + value + model[idx].slice(pos)
+        }
+        return { paragraphs: model, inPlace: true, oldParagraphs }
       }
     }
 
@@ -280,13 +466,13 @@ class FormDrawerSyncService {
       const idx = model.findIndex((p) => p.includes(field.label) && placeholderRe.test(p))
       if (idx >= 0) {
         model[idx] = model[idx].replace(placeholderRe, (m) => (m.endsWith('：') || m.endsWith(':') ? `${m}${value}` : value))
-        return { paragraphs: model, inPlace: true }
+        return { paragraphs: model, inPlace: true, oldParagraphs }
       }
     }
 
     // 策略 3：文末追加问答行
     model.push(`${field.label || '答案'}：${value}`)
-    return { paragraphs: model, inPlace: false }
+    return { paragraphs: model, inPlace: false, oldParagraphs }
   }
 
   // ──────────────── 导出（M4 由 FormFillView 调用） ────────────────
@@ -300,6 +486,13 @@ class FormDrawerSyncService {
         return { success: true, blob }
       }
       if (mode === 'docs') {
+        // 文档导出：优先用 docx 库「原样导出」富结构（表格/合并/边框全保留）。
+        // 不要用 officeService.exportDocument() —— 那会把 Univer 的 dataStream 按行
+        // 压平成纯文本 Paragraph，表格结构/合并全丢，导致成品排版错乱。
+        if (this._docRich) {
+          const blob = await docxRichToBlob(this._docRich)
+          if (blob) return { success: true, blob }
+        }
         const blob = await officeService.exportDocument()
         if (!blob) return { success: false, error: '文档导出失败' }
         return { success: true, blob }
@@ -376,6 +569,8 @@ class FormDrawerSyncService {
   /** 会话结束/重开时清空内部状态（由 formFillStore.endSession 调用） */
   resetSession(): void {
     this._docModel = null
+    this._docModelPaths = null
+    this._docRich = null
     this._docTitle = null
     this._targetSheetName = null
     this._qaSheetName = null

@@ -10,6 +10,7 @@ import { fillDocxFile, fillDocxWithDOMParser, fillDocxWithWordCOMBase64, fillDoc
 import { fillXlsxWithXml, fillXlsxWithExcelCOM } from '../utils/xlsxHandler'
 import { analyzeDocxStructure, extractFillableLocations as extractDocxLocations } from '../utils/docxAnalyzer'
 import { analyzeXlsxStructure, extractFillableLocations as extractXlsxLocations } from '../utils/xlsxAnalyzer'
+import { parseLLMJson } from '../utils/llmJsonParser'
 import PizZip from 'pizzip'
 
 export interface FormField {
@@ -291,24 +292,32 @@ ${locationsDescription}
       onTokenUsage,
     })
 
-    // ========== 第五步：解析 LLM 结果 ==========
+    // ========== 第五步：解析 LLM 结果（使用鲁棒解析器，自动处理截断/未包裹/多块） ==========
     let fields: FormField[] = []
     try {
       console.log('[FormFiller] LLM raw response length:', result.length)
-      const codeBlockMatch = result.match(/```json?\s*([\s\S]*?)\s*```/)
-      const jsonStr = (codeBlockMatch ? codeBlockMatch[1] : result.replace(/```json|```/g, '')).trim()
-      const parsed = JSON.parse(jsonStr)
-      console.log('[FormFiller] Parsed fields count:', parsed.length)
-      fields = parsed.map((f: any, i: number) => ({
+      const parsed = parseLLMJson(result)
+      if (!parsed.ok) {
+        throw new Error(parsed.error || 'JSON 解析失败')
+      }
+      const arr = Array.isArray(parsed.value) ? parsed.value : []
+      console.log(
+        `[FormFiller] Parsed ${arr.length} fields (strategy=${parsed.strategy})`
+      )
+      // 兜底：至少要 1 个字段；少于期望数量时打 warning
+      if (arr.length === 0) {
+        throw new Error('LLM 未返回任何字段')
+      }
+      fields = arr.map((f: any, i: number) => ({
         id: `field-${i}`,
-        label: f.label || `字段 ${i + 1}`,
-        placeholder: f.placeholder || '',
+        label: f.label || f.标签 || f.name || `字段 ${i + 1}`,
+        placeholder: f.placeholder || f.占位符 || '',
         value: '',
         filledBy: 'none' as const,
-        anchorText: f.anchorText || undefined,
-        deletePlaceholder: f.deletePlaceholder || undefined,
-        constraints: f.constraints || undefined,
-        location: f.location || undefined,
+        anchorText: f.anchorText || f.锚点文本 || undefined,
+        deletePlaceholder: f.deletePlaceholder || f.删除占位符 || undefined,
+        constraints: f.constraints || f.约束 || undefined,
+        location: f.location || f.位置 || undefined,
       }))
     } catch (e: any) {
       console.error('[FormFiller] JSON parse failed:', e.message)
