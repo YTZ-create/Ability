@@ -1,6 +1,6 @@
 {
   "name": "ai-agent-app",
-  "version": "3.0.4",
+  "version": "3.0.5",
   "description": "AI Agent desktop app — analyze folders with multi-model AI agents",
   "scripts": {
     "dev": "vite",
