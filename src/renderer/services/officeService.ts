@@ -902,6 +902,16 @@ class OfficeService {
     | { kind: 'rich'; rich: DocxRichDocument; title?: string }
     | null = null
 
+  /**
+   * 「原文件直出」支持：保留手动导入时读到的原始 docx 字节，以及是否已被编辑过。
+   * - 只要没编辑过，导出就回传原始字节 → 与 WPS/Word 打开时一模一样（不受 docx 库重建精简影响）。
+   * - 一旦被编辑（答案写入/直接改 DOM 回写模型），modified=true，导出改回 docx 库重建。
+   */
+  private _currentDocsOriginalBytes: ArrayBuffer | null = null
+  private _currentDocsModified = false
+  /** 导入时的「原始富结构快照」，供导出时逐段比对定位改动（格式保留式编辑用）。 */
+  private _currentDocsOriginalRich: DocxRichDocument | null = null
+
   /** 文档页是否启用 HTML 渲染（插件 docs-html 开关；关闭即回退 Univer 渲染） */
   isDocsHtmlMode(): boolean {
     return usePluginStore
@@ -955,7 +965,12 @@ class OfficeService {
    * 办公抽屉的 .docx 导入走这里（OfficePanel.handleImportDocs / formDrawerSyncService），
    * 原文档排版在 Univer 中完整还原——表单申报书等带表格的文档不再被压成纯文本。
    */
-  prepareDocsImportRich(rich: DocxRichDocument, title?: string, feedback?: string): OfficeCommandResult {
+  prepareDocsImportRich(
+    rich: DocxRichDocument,
+    title?: string,
+    feedback?: string,
+    opts?: { originalBytes?: ArrayBuffer; fresh?: boolean },
+  ): OfficeCommandResult {
     try {
       if (this.isDocsHtmlMode()) {
         // HTML 渲染模式：不创建 Univer 实例，直接保存富结构模型供 HTML 渲染。
@@ -967,6 +982,19 @@ class OfficeService {
         ;(snapshot as any).name = title
         this._currentDocsImport = { kind: 'rich', rich: snapshot, title }
         this._pendingDocsImport = null
+        // 「原文件直出」标记：fresh 导入才重置为未编辑并记录原始字节；
+        // 其余任何富结构重建（Ethan 推送/编辑回写）一律视为已编辑，导出不再直出原文件。
+        if (opts?.fresh) {
+          this._currentDocsOriginalBytes = opts.originalBytes ?? null
+          this._currentDocsModified = false
+          // 保存一份「原始富结构」深拷贝，供导出时定位改动处实现格式保留式编辑
+          this._currentDocsOriginalRich = JSON.parse(JSON.stringify(snapshot)) as DocxRichDocument
+        } else {
+          this._currentDocsModified = true
+          if (!this._currentDocsOriginalBytes && opts?.originalBytes) {
+            this._currentDocsOriginalBytes = opts.originalBytes
+          }
+        }
         useOfficeDrawerStore.getState().bumpDocsVersion()
         return { success: true, message: feedback ?? '已导入' }
       }
@@ -1032,6 +1060,26 @@ class OfficeService {
   getCurrentDocsRich(): DocxRichDocument | null {
     if (this._currentDocsImport?.kind === 'rich') return this._currentDocsImport.rich
     return null
+  }
+
+  /** 当前文档是否已被编辑过（false 且持有原始字节时，导出应原文件直出）。 */
+  hasCurrentDocsChanged(): boolean {
+    return this._currentDocsModified
+  }
+
+  /** 手动导入时保留的原始 docx 字节（未编辑导出的「原样直出」用）。 */
+  getCurrentDocsOriginalBytes(): ArrayBuffer | null {
+    return this._currentDocsOriginalBytes
+  }
+
+  /** 文档内容已被编辑（直接改 DOM/内容可编辑时调用），导出改回重建路径而非原文件直出。 */
+  markDocsModified(): void {
+    this._currentDocsModified = true
+  }
+
+  /** 导入时的「原始富结构」快照（导出时定位改动处、生成格式保留式编辑）。 */
+  getCurrentDocsOriginalRich(): DocxRichDocument | null {
+    return this._currentDocsOriginalRich
   }
 
   /** 容器重建完成后挂载待导入内容（由 OfficePanel 在容器 remount 后调用） */

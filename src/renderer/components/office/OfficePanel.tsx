@@ -24,6 +24,7 @@ import {
   sectionZoneHtml,
   buildFallbackHeaderHtml,
 } from '../../utils/docxRichRenderer'
+import { patchDocxPreserve } from '../../utils/docxPreserveExport'
 import type { DocxRichDocument } from '../../utils/docxParagraphs'
 import { PagedDocsView, type PagedBlock } from './PagedDocsView'
 
@@ -399,7 +400,38 @@ export const OfficePanel: React.FC = () => {
         }
         try {
           if (rich) {
-            blob = await docxRichToBlob(rich)
+            // 未编辑过 → 直接回传导入时的原始 docx 字节（与 WPS/原始文件完全一致，绕开 docx 库重建精简）
+            if (!officeService.hasCurrentDocsChanged()) {
+              const raw = officeService.getCurrentDocsOriginalBytes()
+              if (raw) {
+                blob = new Blob([raw], {
+                  type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                })
+                setDocsFeedback('已导出（未编辑，原样直出）')
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'document.docx'
+                a.click()
+                setTimeout(() => URL.revokeObjectURL(url), 1000)
+                return
+              }
+            }
+            // 编辑过 → 先尝试「格式保留式编辑」：只在原始文件上改被改的段落，其余一字不动；
+            // 若无法唯一定位（重复文本等）则自动回退 docx 库整体重建。
+            const origBytes = officeService.getCurrentDocsOriginalBytes()
+            const origRich = officeService.getCurrentDocsOriginalRich()
+            if (origBytes && origRich) {
+              const patched = await patchDocxPreserve(origBytes, rich, origRich)
+              if (patched) {
+                blob = patched
+                setDocsFeedback('已导出（格式保留式编辑，仅改动处变更）')
+              } else {
+                blob = await docxRichToBlob(rich)
+              }
+            } else {
+              blob = await docxRichToBlob(rich)
+            }
           } else {
             setDocsFeedback('暂无可导出的文档内容（尚未导入文档）')
             return
@@ -483,7 +515,11 @@ export const OfficePanel: React.FC = () => {
         if (!rich.blocks.length) {
           setDocsNote('文档内容为空或解析失败')
         } else {
-          const result = officeService.prepareDocsImportRich(rich, title)
+          // 记录原始字节(fresh)——只要不编辑，导出就直接回传原文件，保证与 WPS/Word 完全一致
+          const result = officeService.prepareDocsImportRich(rich, title, undefined, {
+            fresh: true,
+            originalBytes: buffer,
+          })
           if (!result.success) {
             setDocsNote(`导入失败: ${result.message}`)
           }
@@ -672,7 +708,10 @@ export const OfficePanel: React.FC = () => {
                         : {})}
                       onInput={() => {
                         const rich = officeService.getCurrentDocsRich()
-                        if (rich && htmlDocsRef.current) syncHtmlBackToRich(rich, htmlDocsRef.current)
+                        if (rich && htmlDocsRef.current) {
+                          syncHtmlBackToRich(rich, htmlDocsRef.current)
+                          officeService.markDocsModified()
+                        }
                       }}
                       onPageInfo={(cur, total) =>
                         setHtmlPageInfo((prev) =>

@@ -712,7 +712,9 @@ function cellToDocxCell(cell: DocxCell): TableCell {
     children,
     verticalAlign: VerticalAlign.CENTER,
   }
-  if (cell.width && cell.width > 0) opts.width = { size: Math.max(50, Math.round(cell.width / 20)), type: WidthType.DXA }
+  // 单元格宽度：cell.width 单位 = twip = DXA（来自 <w:tcW w:w>），与 tblGrid 的 gridCol 一一对应，
+  // 必须 1:1 直写。此前误除以 20 会把单元格宽压成原 1/20，WPS 会遵守 tcW 以至整表挤成细条。
+  if (cell.width && cell.width > 0) opts.width = { size: Math.max(50, Math.round(cell.width)), type: WidthType.DXA }
   // 横向合并
   if (cell.colSpan > 1) opts.columnSpan = cell.colSpan
   // 纵向合并：

@@ -12,8 +12,32 @@
 export interface DocxRunLike {
   text: string
   bold?: boolean
+  italic?: boolean
+  strike?: boolean
+  underline?: string
+  color?: string
+  highlight?: string
+  vertAlign?: 'super' | 'sub'
+  outline?: boolean
+  characterSpacing?: number
   fontSize?: number
   fontFamily?: string
+}
+
+/** 从源 run 复制所有排版样式到目标 run（下划线/粗斜/颜色/底纹/上下标/空心/字距/字号/字体都继承）。 */
+function copyStyle(src: DocxRunLike, dst: DocxRunLike): DocxRunLike {
+  if (src.bold) dst.bold = true
+  if (src.italic) dst.italic = true
+  if (src.strike) dst.strike = true
+  if (src.underline) dst.underline = src.underline
+  if (src.color) dst.color = src.color
+  if (src.highlight) dst.highlight = src.highlight
+  if (src.vertAlign) dst.vertAlign = src.vertAlign
+  if (src.outline) dst.outline = true
+  if (src.characterSpacing) dst.characterSpacing = src.characterSpacing
+  if (src.fontSize) dst.fontSize = src.fontSize
+  if (src.fontFamily) dst.fontFamily = src.fontFamily
+  return dst
 }
 
 export interface ParagraphLike {
@@ -89,6 +113,7 @@ export function mergeAnswerIntoParagraph(
   // 把 runs 切成 prefix / drop / suffix 三段（用调整后的切点）
   const prefixRuns: DocxRunLike[] = []
   const suffixRuns: DocxRunLike[] = []
+  const droppedRuns: DocxRunLike[] = [] // 被替换区段里的 run（填空题占位符通常在这里，带下划线）
   let cursor = 0
   for (const r of runs) {
     const t = String(r.text || '')
@@ -102,6 +127,10 @@ export function mergeAnswerIntoParagraph(
     } else {
       const preKeep = Math.max(0, Math.min(rEnd, rawCutStartAdj) - rStart)
       const sufKeep = Math.max(0, rEnd - Math.max(rStart, rawCutEndAdj))
+      if (sufKeep === 0 && preKeep === 0) {
+        // 整个 run 落入被替换区 → 记录其样式（填空下划线占位就在这）
+        droppedRuns.push({ ...r })
+      }
       if (preKeep > 0) prefixRuns.push({ ...r, text: t.slice(0, preKeep) })
       if (sufKeep > 0) suffixRuns.push({ ...r, text: t.slice(t.length - sufKeep) })
     }
@@ -109,11 +138,9 @@ export function mergeAnswerIntoParagraph(
   }
   const cleanPrefix = mergeAdjacent(prefixRuns)
   const cleanSuffix = mergeAdjacent(suffixRuns)
-  const styleSrc = cleanPrefix[cleanPrefix.length - 1] || cleanSuffix[0] || runs[0] || {}
-  const valueRun: DocxRunLike = { text: insertedRaw }
-  if (styleSrc.bold) valueRun.bold = styleSrc.bold
-  if (styleSrc.fontSize) valueRun.fontSize = styleSrc.fontSize
-  if (styleSrc.fontFamily) valueRun.fontFamily = styleSrc.fontFamily
+  // 样式源优先级：先取被替换的占位 run（保住下划线），再退回保留的前缀/后缀/首个 run。
+  const styleSrc = droppedRuns[0] || cleanPrefix[cleanPrefix.length - 1] || cleanSuffix[0] || runs[0] || {}
+  const valueRun: DocxRunLike = copyStyle(styleSrc, { text: insertedRaw })
   if (insertedRaw.length === 0) {
     paragraph.runs = [...cleanPrefix, ...cleanSuffix]
   } else {
@@ -153,17 +180,8 @@ function buildNormToRawIndex(raw: string): (normIdx: number) => number {
 
 function fallbackRewrite(paragraph: ParagraphLike, newText: string): void {
   const runs = Array.isArray(paragraph.runs) ? paragraph.runs : []
-  const styleSrc = runs.find((r) => r.text && r.text.length > 0) || runs[0] || {}
-  paragraph.runs = newText
-    ? [
-        {
-          text: newText,
-          ...(styleSrc.bold ? { bold: true } : {}),
-          ...(styleSrc.fontSize ? { fontSize: styleSrc.fontSize } : {}),
-          ...(styleSrc.fontFamily ? { fontFamily: styleSrc.fontFamily } : {}),
-        },
-      ]
-    : []
+  const styleSrc: DocxRunLike = runs.find((r) => r.text && r.text.length > 0) || runs[0] || {}
+  paragraph.runs = newText ? [copyStyle(styleSrc, { text: newText })] : []
   paragraph.empty = !newText
 }
 
